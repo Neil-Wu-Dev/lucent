@@ -1,0 +1,35 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+backend/.env
+
+# Java / Gradle
+.gradle/
+build/
+out/
+target/
+*.class
+
+# Frontend / Node
+node_modules/
+dist/
+coverage/
+.vite/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+

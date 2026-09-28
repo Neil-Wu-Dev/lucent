@@ -1,0 +1,77 @@
+#!/bin/sh
+#
+# Active when this repository has: git config core.hooksPath .githooks
+
+MAX_BYTES=10485760
+MAX_LABEL="10 MiB"
+ZERO_SHA="0000000000000000000000000000000000000000"
+
+violations=""
+seen_objects=" "
+total_size=0
+total_files=0
+
+while read -r local_ref local_sha remote_ref remote_sha
+do
+  if [ "$local_sha" = "$ZERO_SHA" ]; then
+    continue
+  fi
+
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    objects="$(git rev-list --objects "$local_sha" --not --remotes)"
+  else
+    objects="$(git rev-list --objects "$remote_sha..$local_sha")"
+  fi
+
+  while read -r object_path
+  do
+    object_id=${object_path%% *}
+    file_path=${object_path#* }
+
+    if [ -z "$object_id" ]; then
+      continue
+    fi
+
+    object_type="$(git cat-file -t "$object_id" 2>/dev/null)"
+
+    if [ "$object_type" != "blob" ]; then
+      continue
+    fi
+
+    case "$seen_objects" in
+      *" $object_id "*)
+        continue
+        ;;
+    esac
+
+    seen_objects="${seen_objects}${object_id} "
+    object_size="$(git cat-file -s "$object_id")"
+    total_size=$((total_size + object_size))
+    total_files=$((total_files + 1))
+
+    if [ "$object_size" -gt "$MAX_BYTES" ]; then
+      size_mib=$(( (object_size + 1048575) / 1048576 ))
+      violations="${violations}
+${object_id}    ${size_mib} MiB    ${file_path}"
+    fi
+  done <<EOF
+$objects
+EOF
+done
+
+if [ "$total_size" -gt "$MAX_BYTES" ]; then
+  total_mib=$(( (total_size + 1048575) / 1048576 ))
+  echo "Push rejected: this push introduces about ${total_mib} MiB across ${total_files} file(s), exceeding the $MAX_LABEL limit."
+
+  if [ -n "$violations" ]; then
+    echo
+    echo "Files larger than $MAX_LABEL:"
+    printf '%s\n' "$violations"
+  fi
+
+  echo
+  echo "Reduce the pushed file size, split the work into smaller pushes, or raise MAX_BYTES in .githooks/pre-push."
+  exit 1
+fi
+
+exit 0
