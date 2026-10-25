@@ -1,0 +1,63 @@
+name: Infrastructure Pipeline
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lucent-infrastructure-production
+  cancel-in-progress: false
+
+jobs:
+  validate-plan-apply:
+    name: Validate, plan, and apply Terraform
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_SDK_LOAD_CONFIG: "1"
+      TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.4"
+
+      - name: Initialize Terraform remote state
+        shell: powershell
+        working-directory: infrastructure
+        run: |
+          $accountId = aws sts get-caller-identity --query Account --output text
+          if (-not $accountId) { throw "Could not determine the AWS account ID." }
+          terraform init -reconfigure "-backend-config=bucket=lucent-terraform-state-$accountId" "-backend-config=key=lucent/terraform.tfstate" "-backend-config=region=us-east-1" "-backend-config=encrypt=true" "-backend-config=use_lockfile=true"
+
+      - name: Check Terraform formatting
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform fmt -check -recursive
+
+      - name: Validate Terraform
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform validate
+
+      - name: Create Terraform plan
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform plan -out=terraform.tfplan
+
+      - name: Apply Terraform plan
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform apply -auto-approve terraform.tfplan
+
+      - name: Verify deployed security
+        shell: powershell
+        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
