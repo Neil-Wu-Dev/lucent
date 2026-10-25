@@ -257,7 +257,9 @@ if ($Ci) {
 }
 
 $secretPattern = 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|aws_secret_access_key|aws_session_token|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-$matches = & git grep -n -I -E $secretPattern -- . ':!infrastructure/secrets.auto.tfvars'
+# Exclude this script because it necessarily contains the credential patterns
+# that it uses to scan every other tracked source file.
+$matches = & git grep -n -I -E $secretPattern -- . ':!infrastructure/secrets.auto.tfvars' ':!scripts/security-verify.ps1'
 $gitGrepExitCode = $LASTEXITCODE
 
 if ($gitGrepExitCode -gt 1) {
@@ -283,8 +285,8 @@ $identity = Invoke-Native -Exe $AwsExe -Arguments @(
 Add-Result -Name 'Temporary AWS credentials are usable' -Passed ([bool]$identity.Account) -Detail "Account $($identity.Account), ARN $($identity.Arn)"
 
 Write-Host '=== TERRAFORM OUTPUTS ==='
-$backendIds = @((Get-Tf 'application_instance_ids'))
-$frontendIds = @((Get-Tf 'frontend_instance_ids'))
+$backendIds = @(Get-Tf 'application_instance_ids' | ForEach-Object { [string]$_ })
+$frontendIds = @(Get-Tf 'frontend_instance_ids' | ForEach-Object { [string]$_ })
 $allInstanceIds = @($backendIds + $frontendIds)
 $albSecurityGroupId = [string](Get-Tf 'alb_security_group_id')
 $applicationSecurityGroupId = [string](Get-Tf 'application_security_group_id')
@@ -334,11 +336,14 @@ $rdsInstances = @(
 ).DBInstances
 $rds = $rdsInstances | Where-Object { $_.Endpoint.Address -eq $databaseEndpoint } | Select-Object -First 1
 
+$rdsPrivacyDetail = if ($rds) {
+    "PubliclyAccessible=$($rds.PubliclyAccessible)"
+} else {
+    'RDS endpoint was not found.'
+}
 Add-Result -Name 'RDS is private' -Passed (
     $null -ne $rds -and $rds.PubliclyAccessible -eq $false
-) -Detail (
-    if ($rds) { "PubliclyAccessible=$($rds.PubliclyAccessible)" } else { 'RDS endpoint was not found.' }
-)
+) -Detail $rdsPrivacyDetail
 
 Write-Host '=== SECURITY GROUP POLICY ==='
 $groups = @(

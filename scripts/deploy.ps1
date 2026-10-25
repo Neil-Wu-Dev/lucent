@@ -252,8 +252,10 @@ if ($ApplyInfrastructure) {
 
 Write-Host '=== Terraform outputs ==='
 
-$frontendIds = @(Get-Tf 'frontend_instance_ids')
-$backendIds = @(Get-Tf 'application_instance_ids')
+# Force Terraform JSON lists into flat PowerShell string arrays. This avoids
+# treating an entire JSON list as one SSM target.
+$frontendIds = @(Get-Tf 'frontend_instance_ids' | ForEach-Object { [string]$_ })
+$backendIds = @(Get-Tf 'application_instance_ids' | ForEach-Object { [string]$_ })
 $ecr = [string](Get-Tf 'backend_ecr_repository_url')
 $alb = [string](Get-Tf 'lucent_alb_url')
 $databaseEndpoint = [string](Get-Tf 'database_endpoint')
