@@ -97,6 +97,18 @@ function Get-Tf([string]$key) {
     return ($raw | ConvertFrom-Json)
 }
 
+function Get-TfStringList([string]$key) {
+    $value = Get-Tf $key
+
+    # The GitHub Action Terraform wrapper can serialize JSON output once more.
+    # Decode that representation before flattening IDs for AWS CLI and SSM.
+    if ($value -is [string]) {
+        $value = $value | ConvertFrom-Json
+    }
+
+    return @($value | ForEach-Object { [string]$_ })
+}
+
 function Run-Remote(
     [string[]]$Ids,
     [string[]]$Commands,
@@ -252,10 +264,8 @@ if ($ApplyInfrastructure) {
 
 Write-Host '=== Terraform outputs ==='
 
-# Force Terraform JSON lists into flat PowerShell string arrays. This avoids
-# treating an entire JSON list as one SSM target.
-$frontendIds = @(Get-Tf 'frontend_instance_ids' | ForEach-Object { [string]$_ })
-$backendIds = @(Get-Tf 'application_instance_ids' | ForEach-Object { [string]$_ })
+$frontendIds = @(Get-TfStringList 'frontend_instance_ids')
+$backendIds = @(Get-TfStringList 'application_instance_ids')
 $ecr = [string](Get-Tf 'backend_ecr_repository_url')
 $alb = [string](Get-Tf 'lucent_alb_url')
 $databaseEndpoint = [string](Get-Tf 'database_endpoint')

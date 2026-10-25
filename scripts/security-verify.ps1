@@ -54,6 +54,20 @@ function Get-Tf {
     return $raw | ConvertFrom-Json
 }
 
+function Get-TfStringList {
+    param([string]$Name)
+
+    $value = Get-Tf $Name
+
+    # Decode an extra JSON string layer emitted by the GitHub Action wrapper,
+    # then return one string per Terraform list item.
+    if ($value -is [string]) {
+        $value = $value | ConvertFrom-Json
+    }
+
+    return @($value | ForEach-Object { [string]$_ })
+}
+
 function Add-Result {
     param(
         [string]$Name,
@@ -285,8 +299,8 @@ $identity = Invoke-Native -Exe $AwsExe -Arguments @(
 Add-Result -Name 'Temporary AWS credentials are usable' -Passed ([bool]$identity.Account) -Detail "Account $($identity.Account), ARN $($identity.Arn)"
 
 Write-Host '=== TERRAFORM OUTPUTS ==='
-$backendIds = @(Get-Tf 'application_instance_ids' | ForEach-Object { [string]$_ })
-$frontendIds = @(Get-Tf 'frontend_instance_ids' | ForEach-Object { [string]$_ })
+$backendIds = @(Get-TfStringList 'application_instance_ids')
+$frontendIds = @(Get-TfStringList 'frontend_instance_ids')
 $allInstanceIds = @($backendIds + $frontendIds)
 $albSecurityGroupId = [string](Get-Tf 'alb_security_group_id')
 $applicationSecurityGroupId = [string](Get-Tf 'application_security_group_id')
