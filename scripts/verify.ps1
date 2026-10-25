@@ -243,7 +243,7 @@ if ($RequireBackendHttp) {
 
     $backHttpOK = Ssm-Check $backends @(
         'set -e',
-        'curl -fsS --max-time 5 http://127.0.0.1:8080/ -o /dev/null',
+        'curl -fsS --max-time 5 http://127.0.0.1:8080/api/v1/notes -o /dev/null',
         'echo BACKEND_HTTP_OK'
     ) 'BACKEND_HTTP'
 }

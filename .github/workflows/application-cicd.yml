@@ -13,18 +13,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: lucent-application-deploy-${{ github.ref }}
+  group: lucent-application-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
-  build-test-deploy:
-    name: Build, test, and deploy Lucent
+  build-and-test:
+    name: Build and test Lucent
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, Windows, X64]
-    env:
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_SDK_LOAD_CONFIG: "1"
-      TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
 
     steps:
       - name: Check out source
@@ -46,20 +42,6 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.16.4"
-          terraform_wrapper: false
-
-      - name: Initialize Terraform remote state
-        shell: powershell
-        working-directory: infrastructure
-        run: |
-          $accountId = aws sts get-caller-identity --query Account --output text
-          if (-not $accountId) { throw "Could not determine the AWS account ID." }
-          terraform init -reconfigure "-backend-config=bucket=lucent-terraform-state-$accountId" "-backend-config=key=lucent/terraform.tfstate" "-backend-config=region=us-east-1" "-backend-config=encrypt=true" "-backend-config=use_lockfile=true"
-
       - name: Test Spring Boot backend
         shell: powershell
         working-directory: backend
@@ -74,6 +56,43 @@ jobs:
         shell: powershell
         working-directory: frontend
         run: npm run build
+
+  deploy:
+    name: Deploy Lucent to AWS
+    needs: build-and-test
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_SDK_LOAD_CONFIG: "1"
+      TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.4"
+          terraform_wrapper: false
+
+      - name: Initialize Terraform remote state
+        shell: powershell
+        working-directory: infrastructure
+        run: |
+          $accountId = aws sts get-caller-identity --query Account --output text
+          if (-not $accountId) { throw "Could not determine the AWS account ID." }
+          terraform init -reconfigure "-backend-config=bucket=lucent-terraform-state-$accountId" "-backend-config=key=lucent/terraform.tfstate" "-backend-config=region=us-east-1" "-backend-config=encrypt=true" "-backend-config=use_lockfile=true"
 
       - name: Deploy application
         shell: powershell
