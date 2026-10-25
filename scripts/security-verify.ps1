@@ -216,9 +216,14 @@ function Invoke-ReadOnlySsmCheck {
                 $invocation.ResponseCode -eq 0
             )
 
-            Add-Result -Name "$Label on $instanceId" -Passed $passed -Detail (
-                if ($passed) { 'Read-only SSM probe succeeded.' } else { 'Read-only SSM probe failed.' }
-            )
+            $probeDetail = if ($passed) {
+                'Read-only SSM probe succeeded.'
+            }
+            else {
+                'Read-only SSM probe failed.'
+            }
+
+            Add-Result -Name "$Label on $instanceId" -Passed $passed -Detail $probeDetail
 
             if ($invocation.StandardOutputContent) {
                 Write-Host $invocation.StandardOutputContent
