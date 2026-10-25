@@ -15,8 +15,7 @@ type ApiProblem = {
 
 type BackendStatus = 'checking' | 'online' | 'offline'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
-const NOTES_ENDPOINT = `${API_BASE_URL}/api/v1/notes`
+const NOTES_ENDPOINT = '/api/v1/notes'
 
 async function readResponse<T>(response: Response): Promise<T> {
   const text = await response.text()
@@ -80,7 +79,7 @@ function App() {
         if (isCurrent) {
           setNotes(nextNotes)
           setBackendStatus('online')
-          setBackendStatusDetail(`Connected to ${API_BASE_URL}`)
+          setBackendStatusDetail('Connected through /api')
         }
       })
       .catch((error) => {

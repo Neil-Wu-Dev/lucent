@@ -3,6 +3,21 @@
 .env.*
 !.env.example
 backend/.env
+.aws/
+*.pem
+*.key
+*.p12
+
+# Terraform local state, plans, and secret variable files
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+*.tfplan.json
+terraform.rc
+*.tfrc
 
 # Java / Gradle
 .gradle/
