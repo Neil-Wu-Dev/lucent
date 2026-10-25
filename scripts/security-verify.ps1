@@ -264,9 +264,12 @@ if ($gitGrepExitCode -gt 1) {
     throw "git grep failed while scanning tracked files (exit $gitGrepExitCode)."
 }
 
-Add-Result -Name 'Tracked source contains no AWS credentials or private keys' -Passed ($gitGrepExitCode -eq 1) -Detail (
-    if ($gitGrepExitCode -eq 1) { 'No credential patterns found.' } else { 'Credential pattern found in tracked source.' }
-)
+$credentialScanDetail = if ($gitGrepExitCode -eq 1) {
+    'No credential patterns found.'
+} else {
+    'Credential pattern found in tracked source.'
+}
+Add-Result -Name 'Tracked source contains no AWS credentials or private keys' -Passed ($gitGrepExitCode -eq 1) -Detail $credentialScanDetail
 
 Write-Host '=== AWS IDENTITY ==='
 $identity = Invoke-Native -Exe $AwsExe -Arguments @(
