@@ -3,7 +3,8 @@
 param(
     [string]$ProjectDir = 'D:\dev\lucent',
     [string]$TerraformDir = '',
-    [switch]$Ci
+    [switch]$Ci,
+    [switch]$InfrastructureOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -405,6 +406,19 @@ $databasePermissions = Get-SecurityGroupPermission -SecurityGroup $groupsById[$d
 Add-Result -Name 'Only Backend EC2 can reach PostgreSQL TCP 5432' -Passed (
     Test-OnlySecurityGroupSource -Permissions $databasePermissions -ExpectedSourceGroupId $applicationSecurityGroupId
 ) -Detail 'Database ingress source must be the Backend EC2 security group.'
+
+if ($InfrastructureOnly) {
+    Write-Host '=== SECURITY SUMMARY ==='
+    $results | Format-Table -AutoSize
+
+    if (@($results | Where-Object { -not $_.Passed }).Count -gt 0) {
+        Write-Host 'INFRASTRUCTURE SECURITY VERIFICATION FAILED'
+        exit 1
+    }
+
+    Write-Host 'INFRASTRUCTURE SECURITY VERIFICATION PASSED'
+    exit 0
+}
 
 Write-Host '=== ALB TO BACKEND ==='
 $targetHealth = @(

@@ -2,7 +2,11 @@ name: Application CI/CD
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop]
+  workflow_run:
+    workflows: ["Infrastructure Pipeline"]
+    branches: [main]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +19,7 @@ concurrency:
 jobs:
   build-test-deploy:
     name: Build, test, and deploy Lucent
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, Windows, X64]
     env:
       AWS_DEFAULT_REGION: us-east-1
@@ -24,6 +29,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Java 17
         uses: actions/setup-java@v5

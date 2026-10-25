@@ -33,32 +33,27 @@ jobs:
 
       - name: Initialize Terraform remote state
         shell: powershell
-        working-directory: infrastructure
         run: |
           $accountId = aws sts get-caller-identity --query Account --output text
           if (-not $accountId) { throw "Could not determine the AWS account ID." }
-          terraform init -reconfigure "-backend-config=bucket=lucent-terraform-state-$accountId" "-backend-config=key=lucent/terraform.tfstate" "-backend-config=region=us-east-1" "-backend-config=encrypt=true" "-backend-config=use_lockfile=true"
+          terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" init -reconfigure "-backend-config=bucket=lucent-terraform-state-$accountId" "-backend-config=key=lucent/terraform.tfstate" "-backend-config=region=us-east-1" "-backend-config=encrypt=true" "-backend-config=use_lockfile=true"
 
       - name: Check Terraform formatting
         shell: powershell
-        working-directory: infrastructure
-        run: terraform fmt -check -recursive
+        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" fmt -check -recursive
 
       - name: Validate Terraform
         shell: powershell
-        working-directory: infrastructure
-        run: terraform validate
+        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" validate
 
       - name: Create Terraform plan
         shell: powershell
-        working-directory: infrastructure
-        run: terraform plan -out=terraform.tfplan
+        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" plan -out="$env:GITHUB_WORKSPACE\infrastructure\terraform.tfplan"
 
       - name: Apply Terraform plan
         shell: powershell
-        working-directory: infrastructure
-        run: terraform apply -auto-approve terraform.tfplan
+        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" apply -auto-approve "$env:GITHUB_WORKSPACE\infrastructure\terraform.tfplan"
 
       - name: Verify deployed security
         shell: powershell
-        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci
+        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci -InfrastructureOnly

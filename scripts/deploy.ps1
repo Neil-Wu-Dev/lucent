@@ -215,6 +215,45 @@ function Run-Remote(
     }
 }
 
+function Wait-ForSsmManagedInstances(
+    [string[]]$Ids,
+    [int]$TimeoutSeconds = 600
+) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $pendingIds = @($Ids)
+
+    while ($pendingIds.Count -gt 0 -and (Get-Date) -lt $deadline) {
+        $instanceInformation = (
+            Invoke-Native $AwsExe @(
+                'ssm',
+                'describe-instance-information',
+                '--region',
+                $region,
+                '--filters',
+                ('Key=InstanceIds,Values=' + ($pendingIds -join ',')),
+                '--output',
+                'json'
+            )
+        ) | ConvertFrom-Json
+
+        $onlineIds = @(
+            $instanceInformation.InstanceInformationList |
+            Where-Object { $_.PingStatus -eq 'Online' } |
+            ForEach-Object { $_.InstanceId }
+        )
+        $pendingIds = @($pendingIds | Where-Object { $_ -notin $onlineIds })
+
+        if ($pendingIds.Count -gt 0) {
+            Write-Host "Waiting for SSM Online: $($pendingIds -join ', ')"
+            Start-Sleep -Seconds 10
+        }
+    }
+
+    if ($pendingIds.Count -gt 0) {
+        throw "Timed out waiting for EC2 instances to become SSM Online: $($pendingIds -join ', ')"
+    }
+}
+
 function Login-EcrDocker(
     [string]$Registry,
     [string]$Label
@@ -301,6 +340,8 @@ Write-Host "Frontend EC2: $($frontendIds -join ', ')"
 Write-Host "Backend EC2: $($backendIds -join ', ')"
 Write-Host "ALB: $alb"
 Write-Host ('RDS: ' + $databaseEndpoint + ':' + $databasePort)
+Write-Host '=== Waiting for EC2 management readiness ==='
+Wait-ForSsmManagedInstances -Ids @($frontendIds + $backendIds)
 
 # ==========================================================
 # FRONTEND
