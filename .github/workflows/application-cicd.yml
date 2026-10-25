@@ -19,6 +19,7 @@ jobs:
     env:
       AWS_DEFAULT_REGION: us-east-1
       AWS_SDK_LOAD_CONFIG: "1"
+      TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
 
     steps:
       - name: Check out source
@@ -76,4 +77,4 @@ jobs:
 
       - name: Verify deployed security
         shell: powershell
-        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci

@@ -60,4 +60,4 @@ jobs:
 
       - name: Verify deployed security
         shell: powershell
-        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci

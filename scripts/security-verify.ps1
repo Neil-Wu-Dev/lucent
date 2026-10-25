@@ -2,7 +2,8 @@
 # This script never deploys, changes Terraform, restarts services, or prints secrets.
 param(
     [string]$ProjectDir = 'D:\dev\lucent',
-    [string]$TerraformDir = ''
+    [string]$TerraformDir = '',
+    [switch]$Ci
 )
 
 $ErrorActionPreference = 'Stop'
@@ -224,28 +225,36 @@ function Invoke-ReadOnlySsmCheck {
     }
 }
 
-Write-Host '=== LOCAL SECRET HYGIENE ==='
+Write-Host '=== SECRET HYGIENE ==='
 
 $secretPath = Join-Path $TerraformDir 'secrets.auto.tfvars'
 $secretRelativePath = 'infrastructure/secrets.auto.tfvars'
 
-Add-Result -Name 'Local secrets file exists' -Passed (Test-Path -LiteralPath $secretPath) -Detail $secretRelativePath
+if ($Ci) {
+    # CI receives the password from GitHub Actions; it must never receive
+    # the developer-only secrets.auto.tfvars file.
+    Add-Result -Name 'CI database password is injected as a protected environment variable' -Passed (
+        -not [string]::IsNullOrWhiteSpace($env:TF_VAR_database_password)
+    ) -Detail 'TF_VAR_database_password is present without exposing its value.'
+} else {
+    Add-Result -Name 'Local secrets file exists' -Passed (Test-Path -LiteralPath $secretPath) -Detail $secretRelativePath
 
-$ignored = (Get-ExitCode -Exe 'git' -Arguments @(
-        'check-ignore',
-        '--quiet',
-        '--',
-        $secretRelativePath
-    )) -eq 0
-Add-Result -Name 'Local secrets file is Git ignored' -Passed $ignored -Detail $secretRelativePath
+    $ignored = (Get-ExitCode -Exe 'git' -Arguments @(
+            'check-ignore',
+            '--quiet',
+            '--',
+            $secretRelativePath
+        )) -eq 0
+    Add-Result -Name 'Local secrets file is Git ignored' -Passed $ignored -Detail $secretRelativePath
 
-$tracked = (Get-ExitCode -Exe 'git' -Arguments @(
-        'ls-files',
-        '--error-unmatch',
-        '--',
-        $secretRelativePath
-    )) -eq 0
-Add-Result -Name 'Local secrets file is not Git tracked' -Passed (-not $tracked) -Detail $secretRelativePath
+    $tracked = (Get-ExitCode -Exe 'git' -Arguments @(
+            'ls-files',
+            '--error-unmatch',
+            '--',
+            $secretRelativePath
+        )) -eq 0
+    Add-Result -Name 'Local secrets file is not Git tracked' -Passed (-not $tracked) -Detail $secretRelativePath
+}
 
 $secretPattern = 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|aws_secret_access_key|aws_session_token|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 $matches = & git grep -n -I -E $secretPattern -- . ':!infrastructure/secrets.auto.tfvars'
