@@ -231,10 +231,9 @@ function Invoke-RestoreSelfTest {
     }
 }
 
-Initialize-StateStorage
-
 switch ($Action) {
     'Initialize' {
+        Initialize-StateStorage
         Write-Host "Protected Local State directories are ready: $(Split-Path -Parent $StatePath), $BackupDirectory"
     }
     'Backup' {
