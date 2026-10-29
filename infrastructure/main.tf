@@ -539,11 +539,11 @@ resource "aws_launch_template" "backend" {
 }
 
 resource "aws_autoscaling_group" "backend" {
-  name                      = "lucent-backend-asg"
-  min_size                  = var.backend_asg_min_size
-  desired_capacity          = var.backend_asg_desired_capacity
-  max_size                  = var.backend_asg_max_size
-  health_check_type         = "ELB"
+  name              = "lucent-backend-asg"
+  min_size          = var.backend_asg_min_size
+  desired_capacity  = var.backend_asg_desired_capacity
+  max_size          = var.backend_asg_max_size
+  health_check_type = "ELB"
   # This is intentionally longer than metric warmup. It prevents the ASG from
   # replacing fresh instances while the first Application CI/CD release is
   # building and deploying the image after infrastructure creation.
