@@ -327,7 +327,11 @@ Write-Host '=== TERRAFORM OUTPUTS ==='
 $backendAutoScalingGroup = [string](Get-Tf 'backend_autoscaling_group_name')
 $backendIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
 $frontendIds = @(Get-TfStringList 'frontend_instance_ids')
-$allInstanceIds = @($backendIds + $frontendIds)
+$allInstanceIds = @(
+    $backendIds + $frontendIds |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+)
 $albSecurityGroupId = [string](Get-Tf 'alb_security_group_id')
 $applicationSecurityGroupId = [string](Get-Tf 'application_security_group_id')
 $databaseSecurityGroupId = [string](Get-Tf 'database_security_group_id')
@@ -343,24 +347,31 @@ Add-Result -Name 'Expected private EC2 inventory exists' -Passed (
 
 Write-Host '=== INTERNET INBOUND BOUNDARY ==='
 $instances = @(
-    (
-        Invoke-Native -Exe $AwsExe -Arguments @(
+    (Invoke-Native -Exe $AwsExe -Arguments @(
             'ec2',
             'describe-instances',
             '--region',
             $region,
             '--instance-ids'
         ) + $allInstanceIds + @(
+            '--query',
+            'Reservations[].Instances[].{InstanceId:InstanceId,State:State.Name,PublicIpAddress:PublicIpAddress}',
             '--output',
             'json'
-        )
-    ) | ConvertFrom-Json
-).Reservations.Instances
+        ) | ConvertFrom-Json)
+)
 
-$publicInstances = @($instances | Where-Object { $_.PublicIpAddress })
+$returnedInstanceIds = @($instances | ForEach-Object { [string]$_.InstanceId } | Sort-Object -Unique)
+$missingInstances = @($allInstanceIds | Where-Object { $_ -notin $returnedInstanceIds })
+$unexpectedInstances = @($returnedInstanceIds | Where-Object { $_ -notin $allInstanceIds })
+$inactiveInstances = @($instances | Where-Object { $_.State -notin @('pending', 'running') })
+$publicInstances = @($instances | Where-Object { -not [string]::IsNullOrWhiteSpace($_.PublicIpAddress) })
 Add-Result -Name 'Backend and frontend EC2 instances have no public IP' -Passed (
-    $instances.Count -eq $allInstanceIds.Count -and $publicInstances.Count -eq 0
-) -Detail "Checked $($instances.Count) instances."
+    $missingInstances.Count -eq 0 -and
+    $unexpectedInstances.Count -eq 0 -and
+    $inactiveInstances.Count -eq 0 -and
+    $publicInstances.Count -eq 0
+) -Detail "Checked $($instances.Count) expected instances; public=$($publicInstances.Count), missing=$($missingInstances.Count), unexpected=$($unexpectedInstances.Count), inactive=$($inactiveInstances.Count)."
 
 $rdsInstances = @(
     (
