@@ -503,13 +503,24 @@ resource "aws_launch_template" "backend" {
     DB_USERNAME="$$(echo "$$DB_USERNAME_BASE64" | base64 -d)"
     DB_PASSWORD="$$(echo "$$DB_PASSWORD_BASE64" | base64 -d)"
 
-    aws ecr get-login-password --region "$$REGION" | docker login --username AWS --password-stdin "$$REGISTRY"
-    docker pull "$$IMAGE"
-    docker run -d --name lucent-backend --restart unless-stopped -p ${var.backend_container_port}:${var.backend_container_port} \
-      -e DB_URL="$$DB_URL" \
-      -e DB_USERNAME="$$DB_USERNAME" \
-      -e DB_PASSWORD="$$DB_PASSWORD" \
-      "$$IMAGE"
+    # The first infrastructure deployment creates an empty ECR repository.
+    # Do not fail instance initialization before Application CI/CD publishes the
+    # first image; SSM is already ready for that deployment. On later scale-out,
+    # the published image is present and each new instance starts itself.
+    if aws ecr describe-images --region "$$REGION" --repository-name "${var.backend_ecr_repository_name}" --image-ids imageTag=latest >/dev/null 2>&1; then
+      aws ecr get-login-password --region "$$REGION" | docker login --username AWS --password-stdin "$$REGISTRY"
+      docker pull "$$IMAGE"
+      if docker container inspect lucent-backend >/dev/null 2>&1; then
+        docker rm -f lucent-backend
+      fi
+      docker run -d --name lucent-backend --restart unless-stopped -p ${var.backend_container_port}:${var.backend_container_port} \
+        -e DB_URL="$$DB_URL" \
+        -e DB_USERNAME="$$DB_USERNAME" \
+        -e DB_PASSWORD="$$DB_PASSWORD" \
+        "$$IMAGE"
+    else
+      echo "Lucent Backend image is not published yet; waiting for Application CI/CD deployment."
+    fi
   EOF
   )
 
@@ -533,10 +544,12 @@ resource "aws_autoscaling_group" "backend" {
   desired_capacity          = var.backend_asg_desired_capacity
   max_size                  = var.backend_asg_max_size
   health_check_type         = "ELB"
-  health_check_grace_period = var.backend_instance_warmup_seconds
+  # This is intentionally longer than metric warmup. It prevents the ASG from
+  # replacing fresh instances while the first Application CI/CD release is
+  # building and deploying the image after infrastructure creation.
+  health_check_grace_period = var.backend_asg_health_check_grace_seconds
   target_group_arns         = [aws_lb_target_group.backend.arn]
   vpc_zone_identifier       = [aws_subnet.app_a.id, aws_subnet.app_b.id]
-  wait_for_elb_capacity     = var.backend_asg_desired_capacity
   wait_for_capacity_timeout = "15m"
   termination_policies      = ["OldestLaunchTemplate"]
 
@@ -553,7 +566,6 @@ resource "aws_autoscaling_group" "backend" {
       min_healthy_percentage = 50
     }
 
-    triggers = ["launch_template"]
   }
 
   tag {

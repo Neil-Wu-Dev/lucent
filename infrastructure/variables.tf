@@ -72,6 +72,17 @@ variable "backend_instance_warmup_seconds" {
   }
 }
 
+variable "backend_asg_health_check_grace_seconds" {
+  description = "Time allowed for a new backend instance to receive the first application deployment before ALB health failures trigger replacement."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.backend_asg_health_check_grace_seconds >= var.backend_instance_warmup_seconds
+    error_message = "The Backend ASG health-check grace period must be at least the instance warmup period."
+  }
+}
+
 variable "alb_listener_port" {
   description = "Public HTTP listener port for the Lucent Backend Application Load Balancer."
   type        = number
