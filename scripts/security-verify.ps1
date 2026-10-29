@@ -346,20 +346,20 @@ Add-Result -Name 'Expected private EC2 inventory exists' -Passed (
 ) -Detail "Backend ASG InService=$($backendIds.Count), Frontend=$($frontendIds.Count)"
 
 Write-Host '=== INTERNET INBOUND BOUNDARY ==='
-$instances = @(
-    (Invoke-Native -Exe $AwsExe -Arguments @(
-            'ec2',
-            'describe-instances',
-            '--region',
-            $region,
-            '--instance-ids'
-        ) + $allInstanceIds + @(
-            '--query',
-            'Reservations[].Instances[].{InstanceId:InstanceId,State:State.Name,PublicIpAddress:PublicIpAddress}',
-            '--output',
-            'json'
-        ) | ConvertFrom-Json)
+$instanceQueryArguments = @(
+    'ec2',
+    'describe-instances',
+    '--region',
+    $region,
+    '--instance-ids'
+) + $allInstanceIds + @(
+    '--query',
+    'Reservations[].Instances[].{InstanceId:InstanceId,State:State.Name,PublicIpAddress:PublicIpAddress}',
+    '--output',
+    'json'
 )
+$instanceJson = Invoke-Native -Exe $AwsExe -Arguments $instanceQueryArguments
+$instances = @($instanceJson | ConvertFrom-Json)
 
 $returnedInstanceIds = @($instances | ForEach-Object { [string]$_.InstanceId } | Sort-Object -Unique)
 $missingInstances = @($allInstanceIds | Where-Object { $_ -notin $returnedInstanceIds })
