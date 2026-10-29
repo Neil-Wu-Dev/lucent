@@ -27,20 +27,19 @@ output "private_database_subnet_ids" {
   ]
 }
 
-output "application_instance_ids" {
-  description = "Private application EC2 instance IDs."
-  value = [
-    aws_instance.app_a.id,
-    aws_instance.app_b.id
-  ]
+output "backend_autoscaling_group_name" {
+  description = "Name of the Auto Scaling Group that manages all private Lucent Backend instances."
+  value       = aws_autoscaling_group.backend.name
 }
 
-output "application_private_ips" {
-  description = "Private IP addresses of the application EC2 instances."
-  value = [
-    aws_instance.app_a.private_ip,
-    aws_instance.app_b.private_ip
-  ]
+output "backend_autoscaling_group_arn" {
+  description = "ARN of the Auto Scaling Group that manages all private Lucent Backend instances."
+  value       = aws_autoscaling_group.backend.arn
+}
+
+output "backend_launch_template_id" {
+  description = "Launch Template ID used for new Lucent Backend Auto Scaling Group instances."
+  value       = aws_launch_template.backend.id
 }
 
 output "nat_gateway_id" {
@@ -59,7 +58,7 @@ output "backend_alb_dns_name" {
 }
 
 output "backend_target_group_arn" {
-  description = "Target Group ARN that contains the two private backend EC2 instances."
+  description = "Target Group ARN attached to the private Backend Auto Scaling Group."
   value       = aws_lb_target_group.backend.arn
 }
 

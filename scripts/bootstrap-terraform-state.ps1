@@ -1,103 +1,109 @@
-# Creates the shared Terraform state bucket and optionally migrates the local state.
-# Run this once from a developer machine before the GitHub Actions pipelines run.
-
+[CmdletBinding()]
 param(
-    [string]$ProjectDir = "D:\dev\lucent",
-    [string]$TerraformDir = "",
-    [switch]$MigrateState
+    [string]$ProjectDir = 'D:\dev\lucent',
+    [string]$TerraformDir = '',
+    [string]$StatePath = 'D:\TerraformState\lucent\terraform.tfstate',
+    [string]$BackupDirectory = 'D:\TerraformStateBackups\lucent',
+    [switch]$SkipTerraformInit
 )
 
-$ErrorActionPreference = "Stop"
-$region = "us-east-1"
+$ErrorActionPreference = 'Stop'
 
 if (-not $TerraformDir) {
-    $TerraformDir = Join-Path $ProjectDir "infrastructure"
+    $TerraformDir = Join-Path $ProjectDir 'infrastructure'
 }
 
-if (-not (Test-Path -LiteralPath $TerraformDir)) {
+if (-not (Test-Path -LiteralPath $TerraformDir -PathType Container)) {
     throw "Terraform directory not found: $TerraformDir"
 }
 
-$accountId = aws sts get-caller-identity --query Account --output text
-if ($LASTEXITCODE -ne 0 -or -not $accountId) {
-    throw "Could not determine the AWS account ID. Refresh AWS Academy credentials and try again."
+$stateManager = Join-Path $PSScriptRoot 'manage-local-terraform-state.ps1'
+& $stateManager -Action Initialize -StatePath $StatePath -BackupDirectory $BackupDirectory
+
+function Get-CandidateState {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+        $state = $content | ConvertFrom-Json
+        if ($state.version -ne 4 -or [string]::IsNullOrWhiteSpace($state.lineage) -or @($state.resources).Count -eq 0) {
+            return $null
+        }
+
+        return [pscustomobject]@{
+            Path          = (Resolve-Path -LiteralPath $Path).Path
+            Serial        = [long]$state.serial
+            ResourceCount = @($state.resources).Count
+            LastWriteTime = (Get-Item -LiteralPath $Path).LastWriteTimeUtc
+        }
+    }
+    catch {
+        return $null
+    }
 }
 
-$bucket = "lucent-terraform-state-$accountId"
+$targetExists = Test-Path -LiteralPath $StatePath -PathType Leaf
+if ($targetExists) {
+    # Never overwrite a non-empty protected state. Its validity is checked before
+    # any Terraform command is allowed to use it.
+    $target = Get-CandidateState -Path $StatePath
+    if ($null -eq $target) {
+        throw "Protected local state exists but is not a valid resource state: $StatePath. It was not changed."
+    }
 
-# A missing bucket is expected during the first run. Do not let PowerShell
-# turn the AWS CLI non-zero exit code into a terminating error.
-$previousErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-try {
-    & aws s3api head-bucket --bucket $bucket 2>$null
-    $headBucketExitCode = $LASTEXITCODE
-} finally {
-    $ErrorActionPreference = $previousErrorActionPreference
+    & $stateManager -Action Backup -StatePath $StatePath -BackupDirectory $BackupDirectory
+    & $stateManager -Action Verify -StatePath $StatePath -BackupDirectory $BackupDirectory
+    Write-Host "Protected local state already exists. Serial=$($target.Serial), Resources=$($target.ResourceCount)"
+}
+else {
+    $candidates = @(
+        Get-ChildItem -LiteralPath $TerraformDir -Filter 'terraform.tfstate*' -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Get-CandidateState -Path $_.FullName } |
+        Where-Object { $null -ne $_ } |
+        Sort-Object @{ Expression = 'Serial'; Descending = $true }, @{ Expression = 'LastWriteTime'; Descending = $true }
+    )
+
+    if ($candidates.Count -eq 0) {
+        throw "No recoverable local Terraform state was found in $TerraformDir. Refusing to initialize an empty state until AWS resources are checked."
+    }
+
+    $source = $candidates[0]
+    $migrationBackupDirectory = Join-Path $BackupDirectory 'pre-migration'
+    if (-not (Test-Path -LiteralPath $migrationBackupDirectory)) {
+        New-Item -ItemType Directory -Path $migrationBackupDirectory -Force | Out-Null
+    }
+
+    $migrationBackup = Join-Path $migrationBackupDirectory ('terraform-' + (Get-Date -Format 'yyyyMMdd-HHmmssfff') + '-serial-' + $source.Serial + '.tfstate')
+    Copy-Item -LiteralPath $source.Path -Destination $migrationBackup -ErrorAction Stop
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls.exe $migrationBackup /inheritance:r /grant:r "${currentIdentity}:F" 'SYSTEM:F' 'Administrators:F' /c | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not set the private ACL on the pre-migration state backup.' }
+    $sourceHash = (Get-FileHash -LiteralPath $source.Path -Algorithm SHA256).Hash
+    $backupHash = (Get-FileHash -LiteralPath $migrationBackup -Algorithm SHA256).Hash
+    if ($sourceHash -ne $backupHash) {
+        Remove-Item -LiteralPath $migrationBackup -Force -ErrorAction SilentlyContinue
+        throw 'Pre-migration state backup integrity check failed.'
+    }
+
+    Copy-Item -LiteralPath $source.Path -Destination $StatePath -ErrorAction Stop
+    & icacls.exe $StatePath /inheritance:r /grant:r "${currentIdentity}:F" 'SYSTEM:F' 'Administrators:F' /c | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not set the private ACL on the migrated local state.' }
+    & $stateManager -Action Backup -StatePath $StatePath -BackupDirectory $BackupDirectory
+    & $stateManager -Action Verify -StatePath $StatePath -BackupDirectory $BackupDirectory
+    Write-Host "Migrated the latest verified local state. Serial=$($source.Serial), Resources=$($source.ResourceCount)"
 }
 
-if ($headBucketExitCode -ne 0) {
-    aws s3api create-bucket --bucket $bucket --region $region
+if (-not $SkipTerraformInit) {
+    & terraform "-chdir=$TerraformDir" init -reconfigure
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not create Terraform state bucket: $bucket"
-    }
-}
-
-aws s3api put-bucket-versioning --bucket $bucket --versioning-configuration Status=Enabled
-if ($LASTEXITCODE -ne 0) { throw "Could not enable versioning for $bucket" }
-
-# Pass JSON by file rather than directly on the PowerShell command line, which
-# can otherwise remove JSON quotation marks before the AWS CLI receives them.
-$temporaryDirectory = [System.IO.Path]::GetTempPath()
-$encryptionFile = Join-Path $temporaryDirectory ("lucent-s3-encryption-" + [guid]::NewGuid() + ".json")
-$publicAccessBlockFile = Join-Path $temporaryDirectory ("lucent-s3-public-access-" + [guid]::NewGuid() + ".json")
-
-try {
-    [System.IO.File]::WriteAllText(
-        $encryptionFile,
-        '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}',
-        [System.Text.UTF8Encoding]::new($false)
-    )
-    [System.IO.File]::WriteAllText(
-        $publicAccessBlockFile,
-        '{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}',
-        [System.Text.UTF8Encoding]::new($false)
-    )
-
-    aws s3api put-bucket-encryption --bucket $bucket --server-side-encryption-configuration "file://$encryptionFile"
-    if ($LASTEXITCODE -ne 0) { throw "Could not enable encryption for $bucket" }
-
-    aws s3api put-public-access-block --bucket $bucket --public-access-block-configuration "file://$publicAccessBlockFile"
-    if ($LASTEXITCODE -ne 0) { throw "Could not block public access for $bucket" }
-} finally {
-    Remove-Item -LiteralPath $encryptionFile, $publicAccessBlockFile -Force -ErrorAction SilentlyContinue
-}
-
-Push-Location $TerraformDir
-try {
-    $initArguments = @(
-        "init",
-        "-backend-config=bucket=$bucket",
-        "-backend-config=key=lucent/terraform.tfstate",
-        "-backend-config=region=$region",
-        "-backend-config=encrypt=true",
-        "-backend-config=use_lockfile=true"
-    )
-
-    if ($MigrateState) {
-        # This script only adds -force-copy when migration was explicitly
-        # requested, so it remains usable from non-interactive CI sessions.
-        $initArguments += "-migrate-state", "-force-copy"
-    } else {
-        $initArguments += "-reconfigure"
+        throw 'Terraform Local Backend initialization failed.'
     }
 
-    & terraform @initArguments
+    $null = & terraform "-chdir=$TerraformDir" state pull | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) {
-        throw "Terraform remote state initialization failed."
+        throw 'Terraform could not read the protected Local State after initialization.'
     }
-} finally {
-    Pop-Location
 }
 
-Write-Host "Terraform remote state is ready: s3://$bucket/lucent/terraform.tfstate"
+Write-Host "Terraform Local State is ready: $StatePath"

@@ -347,8 +347,7 @@ resource "aws_security_group" "database" {
 # =========================
 #
 # The ALB is Internet-facing and placed in the two public subnets. It forwards
-# HTTP traffic to the existing private EC2 instances on the backend container
-# port. No new EC2 instances are created here.
+# HTTP traffic to private backend instances managed by the Auto Scaling Group.
 
 resource "aws_lb" "backend" {
   name               = "lucent-backend-alb"
@@ -376,8 +375,8 @@ resource "aws_lb_target_group" "backend" {
     enabled             = true
     protocol            = "HTTP"
     port                = "traffic-port"
-    path                = "/"
-    matcher             = "200-499"
+    path                = "/api/v1/notes"
+    matcher             = "200"
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
@@ -411,18 +410,6 @@ resource "aws_lb_target_group" "frontend" {
   tags = {
     Name = "lucent-frontend-tg"
   }
-}
-
-resource "aws_lb_target_group_attachment" "app_a" {
-  target_group_arn = aws_lb_target_group.backend.arn
-  target_id        = aws_instance.app_a.id
-  port             = var.backend_container_port
-}
-
-resource "aws_lb_target_group_attachment" "app_b" {
-  target_group_arn = aws_lb_target_group.backend.arn
-  target_id        = aws_instance.app_b.id
-  port             = var.backend_container_port
 }
 
 resource "aws_lb_target_group_attachment" "frontend_a" {
@@ -465,83 +452,145 @@ resource "aws_lb_listener_rule" "api_to_backend" {
 }
 
 # =========================
-# EC2 Instances
+# Backend Auto Scaling
 # =========================
 #
-# Two private Amazon Linux instances are placed in separate application subnets.
-# They do not receive public IP addresses. Management is intended through SSM.
+# The launch template defines an identical, private runtime for every backend
+# instance. Its startup process makes a new ASG instance independently able to
+# run the current backend container and register as a healthy ALB target.
 
-resource "aws_instance" "app_a" {
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "t3.micro"
-  subnet_id                   = aws_subnet.app_a.id
-  associate_public_ip_address = false
-  vpc_security_group_ids      = [aws_security_group.app_ec2.id]
-  iam_instance_profile        = var.ec2_instance_profile_name
-  user_data                   = <<-EOF
+resource "aws_launch_template" "backend" {
+  name_prefix            = "lucent-backend-"
+  image_id               = data.aws_ami.amazon_linux.id
+  instance_type          = var.backend_instance_type
+  update_default_version = true
+
+  iam_instance_profile {
+    name = var.ec2_instance_profile_name
+  }
+
+  network_interfaces {
+    associate_public_ip_address = false
+    security_groups             = [aws_security_group.app_ec2.id]
+  }
+
+  user_data = base64encode(<<-EOF
     #!/bin/bash
     set -euxo pipefail
+
+    REGION="us-east-1"
+    REGISTRY="${split("/", aws_ecr_repository.backend.repository_url)[0]}"
+    IMAGE="${aws_ecr_repository.backend.repository_url}:latest"
+    DB_URL_BASE64="${base64encode("jdbc:postgresql://${aws_db_instance.lucent.address}:${aws_db_instance.lucent.port}/${var.database_name}")}"
+    DB_USERNAME_BASE64="${base64encode(var.database_username)}"
+    DB_PASSWORD_BASE64="${base64encode(var.database_password)}"
 
     if ! command -v amazon-ssm-agent >/dev/null 2>&1; then
       dnf install -y amazon-ssm-agent
     fi
-
-    systemctl enable amazon-ssm-agent
-
-    if ! systemctl is-active --quiet amazon-ssm-agent; then
-      systemctl start amazon-ssm-agent
-    fi
+    systemctl enable --now amazon-ssm-agent
 
     if ! command -v docker >/dev/null 2>&1; then
       dnf install -y docker
     fi
+    systemctl enable --now docker
 
-    systemctl enable docker
-
-    if ! systemctl is-active --quiet docker; then
-      systemctl start docker
+    if ! command -v aws >/dev/null 2>&1; then
+      dnf install -y awscli || dnf install -y awscli2 || dnf install -y aws-cli
     fi
-  EOF
 
-  tags = {
-    Name = "lucent-app-1"
+    DB_URL="$$(echo "$$DB_URL_BASE64" | base64 -d)"
+    DB_USERNAME="$$(echo "$$DB_USERNAME_BASE64" | base64 -d)"
+    DB_PASSWORD="$$(echo "$$DB_PASSWORD_BASE64" | base64 -d)"
+
+    aws ecr get-login-password --region "$$REGION" | docker login --username AWS --password-stdin "$$REGISTRY"
+    docker pull "$$IMAGE"
+    docker run -d --name lucent-backend --restart unless-stopped -p ${var.backend_container_port}:${var.backend_container_port} \
+      -e DB_URL="$$DB_URL" \
+      -e DB_USERNAME="$$DB_USERNAME" \
+      -e DB_PASSWORD="$$DB_PASSWORD" \
+      "$$IMAGE"
+  EOF
+  )
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name    = "lucent-backend-asg"
+      Service = "lucent-backend"
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
-resource "aws_instance" "app_b" {
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "t3.micro"
-  subnet_id                   = aws_subnet.app_b.id
-  associate_public_ip_address = false
-  vpc_security_group_ids      = [aws_security_group.app_ec2.id]
-  iam_instance_profile        = var.ec2_instance_profile_name
-  user_data                   = <<-EOF
-    #!/bin/bash
-    set -euxo pipefail
+resource "aws_autoscaling_group" "backend" {
+  name                      = "lucent-backend-asg"
+  min_size                  = var.backend_asg_min_size
+  desired_capacity          = var.backend_asg_desired_capacity
+  max_size                  = var.backend_asg_max_size
+  health_check_type         = "ELB"
+  health_check_grace_period = var.backend_instance_warmup_seconds
+  target_group_arns         = [aws_lb_target_group.backend.arn]
+  vpc_zone_identifier       = [aws_subnet.app_a.id, aws_subnet.app_b.id]
+  wait_for_elb_capacity     = var.backend_asg_desired_capacity
+  wait_for_capacity_timeout = "15m"
+  termination_policies      = ["OldestLaunchTemplate"]
 
-    if ! command -v amazon-ssm-agent >/dev/null 2>&1; then
-      dnf install -y amazon-ssm-agent
-    fi
+  launch_template {
+    id      = aws_launch_template.backend.id
+    version = "$Latest"
+  }
 
-    systemctl enable amazon-ssm-agent
+  instance_refresh {
+    strategy = "Rolling"
 
-    if ! systemctl is-active --quiet amazon-ssm-agent; then
-      systemctl start amazon-ssm-agent
-    fi
+    preferences {
+      instance_warmup        = var.backend_instance_warmup_seconds
+      min_healthy_percentage = 50
+    }
 
-    if ! command -v docker >/dev/null 2>&1; then
-      dnf install -y docker
-    fi
+    triggers = ["launch_template"]
+  }
 
-    systemctl enable docker
+  tag {
+    key                 = "Name"
+    value               = "lucent-backend-asg"
+    propagate_at_launch = true
+  }
 
-    if ! systemctl is-active --quiet docker; then
-      systemctl start docker
-    fi
-  EOF
+  tag {
+    key                 = "Service"
+    value               = "lucent-backend"
+    propagate_at_launch = true
+  }
 
-  tags = {
-    Name = "lucent-app-2"
+  lifecycle {
+    precondition {
+      condition = (
+        var.backend_asg_min_size <= var.backend_asg_desired_capacity &&
+        var.backend_asg_desired_capacity <= var.backend_asg_max_size
+      )
+      error_message = "Backend ASG capacity must satisfy min_size <= desired_capacity <= max_size."
+    }
+  }
+}
+
+resource "aws_autoscaling_policy" "backend_cpu_target" {
+  name                      = "lucent-backend-cpu-50"
+  autoscaling_group_name    = aws_autoscaling_group.backend.name
+  policy_type               = "TargetTrackingScaling"
+  estimated_instance_warmup = var.backend_instance_warmup_seconds
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+
+    target_value = var.backend_cpu_target_percent
   }
 }
 

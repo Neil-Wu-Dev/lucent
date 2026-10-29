@@ -109,6 +109,23 @@ function Get-TfStringList([string]$key) {
     return @($value | ForEach-Object { [string]$_ })
 }
 
+function Get-AsgInServiceInstanceIds([string]$AutoScalingGroupName) {
+    $raw = Invoke-Native $AwsExe @(
+        'autoscaling',
+        'describe-auto-scaling-groups',
+        '--region',
+        $region,
+        '--auto-scaling-group-names',
+        $AutoScalingGroupName,
+        '--query',
+        "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId",
+        '--output',
+        'json'
+    )
+
+    return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
+}
+
 function Run-Remote(
     [string[]]$Ids,
     [string[]]$Commands,
@@ -304,7 +321,8 @@ if ($ApplyInfrastructure) {
 Write-Host '=== Terraform outputs ==='
 
 $frontendIds = @(Get-TfStringList 'frontend_instance_ids')
-$backendIds = @(Get-TfStringList 'application_instance_ids')
+$backendAutoScalingGroup = [string](Get-Tf 'backend_autoscaling_group_name')
+$backendIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
 $ecr = [string](Get-Tf 'backend_ecr_repository_url')
 $alb = [string](Get-Tf 'lucent_alb_url')
 $databaseEndpoint = [string](Get-Tf 'database_endpoint')
@@ -315,7 +333,7 @@ $databasePassword = [string](Get-Tf 'database_password')
 
 if (
     $frontendIds.Count -ne 2 -or
-    $backendIds.Count -ne 2 -or
+    $backendIds.Count -lt 2 -or
     -not $ecr -or
     -not $databaseEndpoint -or
     -not $databasePassword
@@ -337,6 +355,7 @@ $account = (
 $bucket = "lucent-deploy-$account"
 
 Write-Host "Frontend EC2: $($frontendIds -join ', ')"
+Write-Host "Backend ASG: $backendAutoScalingGroup"
 Write-Host "Backend EC2: $($backendIds -join ', ')"
 Write-Host "ALB: $alb"
 Write-Host ('RDS: ' + $databaseEndpoint + ':' + $databasePort)
@@ -506,6 +525,16 @@ $backCommands = @(
     'docker logs --tail 25 lucent-backend',
     'echo BACKEND_IMAGE_AND_CONTAINER_DEPLOYED'
 )
+
+# Scale-out can occur while the frontend upload and image build are running.
+# Discover the ASG again so every currently active backend receives this release.
+$backendIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
+
+if ($backendIds.Count -lt 2) {
+    throw "Backend Auto Scaling Group $backendAutoScalingGroup has fewer than two InService instances."
+}
+
+Wait-ForSsmManagedInstances -Ids $backendIds
 
 $backOK = Run-Remote $backendIds $backCommands 'BACKEND'
 

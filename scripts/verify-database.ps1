@@ -36,6 +36,21 @@ function Get-TerraformJsonOutput {
     return Invoke-Native -Exe 'terraform' -Arguments @("-chdir=$TerraformDir", 'output', '-json', $Name)
 }
 
+function Get-AsgInServiceInstanceIds {
+    param([string]$AutoScalingGroupName)
+
+    $raw = Invoke-Native -Exe 'aws' -Arguments @(
+        'autoscaling',
+        'describe-auto-scaling-groups',
+        '--region', $region,
+        '--auto-scaling-group-names', $AutoScalingGroupName,
+        '--query', "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId",
+        '--output', 'json'
+    )
+
+    return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
+}
+
 if (-not $DatabasePassword) {
     $DatabasePassword = Read-Host 'PostgreSQL master password' -AsSecureString
 }
@@ -44,7 +59,12 @@ $databaseEndpoint = Get-TerraformOutput 'database_endpoint'
 $databasePort = Get-TerraformOutput 'database_port'
 $databaseName = Get-TerraformOutput 'database_name'
 $databaseUsername = Get-TerraformOutput 'database_username'
-$backendInstanceIds = @(Get-TerraformJsonOutput 'application_instance_ids' | ConvertFrom-Json)
+$backendAutoScalingGroup = Get-TerraformOutput 'backend_autoscaling_group_name'
+$backendInstanceIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
+
+if ($backendInstanceIds.Count -lt 2) {
+    throw "Backend Auto Scaling Group $backendAutoScalingGroup has fewer than two InService instances."
+}
 $databasePasswordPlainText = ConvertFrom-SecureString -SecureString $DatabasePassword -AsPlainText
 $databasePasswordBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($databasePasswordPlainText))
 

@@ -1,8 +1,11 @@
 # =========================
-# Terraform Remote State
+# Terraform Local State
 # =========================
-# The S3 backend lets the self-hosted runner use the same Terraform state
-# as local deployment work. Its bucket is created once by the bootstrap script.
+# This absolute path belongs to the lucent-windows self-hosted runner, not to a
+# repository checkout. GitHub Actions checkouts may be replaced at any time;
+# the Terraform state must not be.
 terraform {
-  backend "s3" {}
+  backend "local" {
+    path = "D:/TerraformState/lucent/terraform.tfstate"
+  }
 }

@@ -92,6 +92,23 @@ function Get-Tf([string]$key) {
     return ($raw | ConvertFrom-Json)
 }
 
+function Get-AsgInServiceInstanceIds([string]$AutoScalingGroupName) {
+    $raw = Invoke-Native $AwsExe @(
+        'autoscaling',
+        'describe-auto-scaling-groups',
+        '--region',
+        $region,
+        '--auto-scaling-group-names',
+        $AutoScalingGroupName,
+        '--query',
+        "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId",
+        '--output',
+        'json'
+    )
+
+    return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
+}
+
 function Ssm-Check(
     [string[]]$Ids,
     [string[]]$Commands,
@@ -201,14 +218,15 @@ function Ssm-Check(
 }
 
 $frontends = @(Get-Tf 'frontend_instance_ids')
-$backends = @(Get-Tf 'application_instance_ids')
+$backendAutoScalingGroup = [string](Get-Tf 'backend_autoscaling_group_name')
+$backends = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
 $frontTg = [string](Get-Tf 'frontend_target_group_arn')
 $backTg = [string](Get-Tf 'backend_target_group_arn')
 $url = [string](Get-Tf 'lucent_alb_url')
 $ecr = [string](Get-Tf 'backend_ecr_repository_url')
 
-if ($frontends.Count -ne 2 -or $backends.Count -ne 2) {
-    throw 'Terraform did not return exactly 2 frontend and 2 backend IDs.'
+if ($frontends.Count -ne 2 -or $backends.Count -lt 2) {
+    throw 'Expected exactly 2 frontend instances and at least 2 InService backend Auto Scaling Group instances.'
 }
 
 Write-Host '=== FRONTEND ==='

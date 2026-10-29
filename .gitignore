@@ -16,6 +16,9 @@ backend/.env
 *.tfvars.json
 *.tfplan
 *.tfplan.json
+terraform-state-backup-*.json
+TerraformState/
+TerraformStateBackups/
 terraform.rc
 *.tfrc
 

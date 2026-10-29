@@ -69,6 +69,25 @@ function Get-TfStringList {
     return @($value | ForEach-Object { [string]$_ })
 }
 
+function Get-AsgInServiceInstanceIds {
+    param([string]$AutoScalingGroupName)
+
+    $raw = Invoke-Native -Exe $AwsExe -Arguments @(
+        'autoscaling',
+        'describe-auto-scaling-groups',
+        '--region',
+        $region,
+        '--auto-scaling-group-names',
+        $AutoScalingGroupName,
+        '--query',
+        "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId",
+        '--output',
+        'json'
+    )
+
+    return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
+}
+
 function Add-Result {
     param(
         [string]$Name,
@@ -305,7 +324,8 @@ $identity = Invoke-Native -Exe $AwsExe -Arguments @(
 Add-Result -Name 'Temporary AWS credentials are usable' -Passed ([bool]$identity.Account) -Detail "Account $($identity.Account), ARN $($identity.Arn)"
 
 Write-Host '=== TERRAFORM OUTPUTS ==='
-$backendIds = @(Get-TfStringList 'application_instance_ids')
+$backendAutoScalingGroup = [string](Get-Tf 'backend_autoscaling_group_name')
+$backendIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
 $frontendIds = @(Get-TfStringList 'frontend_instance_ids')
 $allInstanceIds = @($backendIds + $frontendIds)
 $albSecurityGroupId = [string](Get-Tf 'alb_security_group_id')
@@ -318,8 +338,8 @@ $databaseEndpoint = [string](Get-Tf 'database_endpoint')
 $databasePort = [string](Get-Tf 'database_port')
 
 Add-Result -Name 'Expected private EC2 inventory exists' -Passed (
-    $backendIds.Count -eq 2 -and $frontendIds.Count -eq 2
-) -Detail "Backend=$($backendIds.Count), Frontend=$($frontendIds.Count)"
+    $backendIds.Count -ge 2 -and $frontendIds.Count -eq 2
+) -Detail "Backend ASG InService=$($backendIds.Count), Frontend=$($frontendIds.Count)"
 
 Write-Host '=== INTERNET INBOUND BOUNDARY ==='
 $instances = @(

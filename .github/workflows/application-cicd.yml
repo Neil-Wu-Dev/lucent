@@ -62,6 +62,9 @@ jobs:
     needs: build-and-test
     if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, Windows, X64]
+    concurrency:
+      group: lucent-infrastructure-production
+      cancel-in-progress: false
     env:
       AWS_DEFAULT_REGION: us-east-1
       AWS_SDK_LOAD_CONFIG: "1"
@@ -86,13 +89,38 @@ jobs:
           terraform_version: "1.16.4"
           terraform_wrapper: false
 
-      - name: Initialize Terraform remote state
+      - name: Configure AWS Academy identity
+        shell: powershell
+        env:
+          ACADEMY_AWS_ACCESS_KEY_ID: ${{ secrets.ACADEMY_AWS_ACCESS_KEY_ID }}
+          ACADEMY_AWS_SECRET_ACCESS_KEY: ${{ secrets.ACADEMY_AWS_SECRET_ACCESS_KEY }}
+          ACADEMY_AWS_SESSION_TOKEN: ${{ secrets.ACADEMY_AWS_SESSION_TOKEN }}
+        run: |
+          $required = @(
+            'ACADEMY_AWS_ACCESS_KEY_ID', 'ACADEMY_AWS_SECRET_ACCESS_KEY',
+            'ACADEMY_AWS_SESSION_TOKEN'
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Required GitHub Secret is missing: $name"
+            }
+          }
+
+          $credentialsFile = Join-Path $env:RUNNER_TEMP 'lucent-academy-aws-credentials'
+          $credentials = @"
+          aws_access_key_id=$env:ACADEMY_AWS_ACCESS_KEY_ID
+          aws_secret_access_key=$env:ACADEMY_AWS_SECRET_ACCESS_KEY
+          aws_session_token=$env:ACADEMY_AWS_SESSION_TOKEN
+          "@
+          [System.IO.File]::WriteAllText($credentialsFile, $credentials, [System.Text.UTF8Encoding]::new($false))
+          "AWS_SHARED_CREDENTIALS_FILE=$credentialsFile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AWS_PROFILE=default" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LUCENT_AWS_CREDENTIALS_FILE=$credentialsFile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Initialize Terraform Local State
         shell: powershell
         working-directory: infrastructure
-        run: |
-          $accountId = aws sts get-caller-identity --query Account --output text
-          if (-not $accountId) { throw "Could not determine the AWS account ID." }
-          terraform init -reconfigure "-backend-config=bucket=lucent-terraform-state-$accountId" "-backend-config=key=lucent/terraform.tfstate" "-backend-config=region=us-east-1" "-backend-config=encrypt=true" "-backend-config=use_lockfile=true"
+        run: terraform init -reconfigure
 
       - name: Deploy application
         shell: powershell
@@ -105,3 +133,11 @@ jobs:
       - name: Verify deployed security
         shell: powershell
         run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci
+
+      - name: Remove temporary AWS credentials
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:LUCENT_AWS_CREDENTIALS_FILE)) {
+            Remove-Item -LiteralPath $env:LUCENT_AWS_CREDENTIALS_FILE -Force -ErrorAction SilentlyContinue
+          }
