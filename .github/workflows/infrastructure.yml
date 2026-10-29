@@ -31,33 +31,17 @@ jobs:
           terraform_version: "1.16.4"
           terraform_wrapper: false
 
-      - name: Configure AWS Academy identity
+      - name: Verify AWS Academy identity on the self-hosted Runner
         shell: powershell
-        env:
-          ACADEMY_AWS_ACCESS_KEY_ID: ${{ secrets.ACADEMY_AWS_ACCESS_KEY_ID }}
-          ACADEMY_AWS_SECRET_ACCESS_KEY: ${{ secrets.ACADEMY_AWS_SECRET_ACCESS_KEY }}
-          ACADEMY_AWS_SESSION_TOKEN: ${{ secrets.ACADEMY_AWS_SESSION_TOKEN }}
         run: |
-          $required = @(
-            'ACADEMY_AWS_ACCESS_KEY_ID', 'ACADEMY_AWS_SECRET_ACCESS_KEY',
-            'ACADEMY_AWS_SESSION_TOKEN'
-          )
-          foreach ($name in $required) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Required GitHub Secret is missing: $name"
-            }
+          $credentialsPath = Join-Path $env:USERPROFILE '.aws\credentials'
+          if (-not (Test-Path -LiteralPath $credentialsPath -PathType Leaf)) {
+            throw "AWS Academy credentials are unavailable on this Runner: $credentialsPath"
           }
-
-          $credentialsFile = Join-Path $env:RUNNER_TEMP 'lucent-academy-aws-credentials'
-          $credentials = @"
-          aws_access_key_id=$env:ACADEMY_AWS_ACCESS_KEY_ID
-          aws_secret_access_key=$env:ACADEMY_AWS_SECRET_ACCESS_KEY
-          aws_session_token=$env:ACADEMY_AWS_SESSION_TOKEN
-          "@
-          [System.IO.File]::WriteAllText($credentialsFile, $credentials, [System.Text.UTF8Encoding]::new($false))
-          "AWS_SHARED_CREDENTIALS_FILE=$credentialsFile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "AWS_PROFILE=default" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "LUCENT_AWS_CREDENTIALS_FILE=$credentialsFile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          aws sts get-caller-identity --output json
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The AWS Academy credentials on the self-hosted Runner are expired, invalid, or unavailable.'
+          }
 
       - name: Back up Local Terraform state
         shell: powershell
@@ -65,39 +49,34 @@ jobs:
 
       - name: Initialize Terraform Local State
         shell: powershell
-        run: |
-          terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" init -reconfigure
+        working-directory: infrastructure
+        run: terraform init -reconfigure
 
       - name: Check Terraform formatting
         shell: powershell
-        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" fmt -check -recursive
+        working-directory: infrastructure
+        run: terraform fmt -check -recursive
 
       - name: Validate Terraform
         shell: powershell
-        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" validate
+        working-directory: infrastructure
+        run: terraform validate
 
       - name: Create Terraform plan
         shell: powershell
-        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" plan -out="$env:GITHUB_WORKSPACE\infrastructure\terraform.tfplan"
+        working-directory: infrastructure
+        run: terraform plan -out terraform.tfplan
 
       - name: Apply Terraform plan
         shell: powershell
-        run: terraform -chdir="$env:GITHUB_WORKSPACE\infrastructure" apply -auto-approve "$env:GITHUB_WORKSPACE\infrastructure\terraform.tfplan"
+        working-directory: infrastructure
+        run: terraform apply -auto-approve terraform.tfplan
 
       - name: Verify and back up Local Terraform state
         shell: powershell
         run: |
           .\scripts\manage-local-terraform-state.ps1 -Action Verify
           .\scripts\manage-local-terraform-state.ps1 -Action Backup
-
       - name: Verify deployed security
         shell: powershell
         run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci -InfrastructureOnly
-
-      - name: Remove temporary AWS credentials
-        if: always()
-        shell: powershell
-        run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:LUCENT_AWS_CREDENTIALS_FILE)) {
-            Remove-Item -LiteralPath $env:LUCENT_AWS_CREDENTIALS_FILE -Force -ErrorAction SilentlyContinue
-          }
