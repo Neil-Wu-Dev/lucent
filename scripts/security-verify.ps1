@@ -354,12 +354,28 @@ $instanceQueryArguments = @(
     '--instance-ids'
 ) + $allInstanceIds + @(
     '--query',
-    'Reservations[].Instances[].{InstanceId:InstanceId,State:State.Name,PublicIpAddress:PublicIpAddress}',
+    'Reservations[].Instances[].[InstanceId,State.Name,PublicIpAddress]',
     '--output',
-    'json'
+    'text'
 )
-$instanceJson = Invoke-Native -Exe $AwsExe -Arguments $instanceQueryArguments
-$instances = @($instanceJson | ConvertFrom-Json)
+$instanceText = Invoke-Native -Exe $AwsExe -Arguments $instanceQueryArguments
+$instances = @(
+    $instanceText -split "`r?`n" |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object {
+            $columns = $_ -split "`t"
+
+            if ($columns.Count -ne 3) {
+                throw "Unexpected EC2 query output row: $_"
+            }
+
+            [pscustomobject]@{
+                InstanceId      = $columns[0]
+                State           = $columns[1]
+                PublicIpAddress = if ($columns[2] -eq 'None') { $null } else { $columns[2] }
+            }
+        }
+)
 
 $returnedInstanceIds = @($instances | ForEach-Object { [string]$_.InstanceId } | Sort-Object -Unique)
 $missingInstances = @($allInstanceIds | Where-Object { $_ -notin $returnedInstanceIds })
