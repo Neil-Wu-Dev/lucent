@@ -88,6 +88,47 @@ function Get-AsgInServiceInstanceIds {
     return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
 }
 
+function Wait-ForHealthyAlbTargets {
+    param(
+        [string]$TargetGroupArn,
+        [string[]]$ExpectedInstanceIds,
+        [int]$TimeoutSeconds = 180,
+        [int]$PollIntervalSeconds = 5
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $targetHealth = @()
+
+    do {
+        $raw = Invoke-Native -Exe $AwsExe -Arguments @(
+            'elbv2',
+            'describe-target-health',
+            '--region',
+            $region,
+            '--target-group-arn',
+            $TargetGroupArn,
+            '--output',
+            'json'
+        )
+        $targetHealth = @(($raw | ConvertFrom-Json).TargetHealthDescriptions)
+        $healthyTargetIds = @(
+            $targetHealth |
+                Where-Object { $_.TargetHealth.State -eq 'healthy' } |
+                ForEach-Object { [string]$_.Target.Id }
+        )
+
+        if (@($ExpectedInstanceIds | Where-Object { $_ -notin $healthyTargetIds }).Count -eq 0) {
+            return $targetHealth
+        }
+
+        if ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds $PollIntervalSeconds
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    return $targetHealth
+}
+
 function Add-Result {
     param(
         [string]$Name,
@@ -473,20 +514,7 @@ if ($InfrastructureOnly) {
 }
 
 Write-Host '=== ALB TO BACKEND ==='
-$targetHealth = @(
-    (
-        Invoke-Native -Exe $AwsExe -Arguments @(
-            'elbv2',
-            'describe-target-health',
-            '--region',
-            $region,
-            '--target-group-arn',
-            $backendTargetGroupArn,
-            '--output',
-            'json'
-        )
-    ) | ConvertFrom-Json
-).TargetHealthDescriptions
+$targetHealth = @(Wait-ForHealthyAlbTargets -TargetGroupArn $backendTargetGroupArn -ExpectedInstanceIds $backendIds)
 
 $healthyBackendIds = @(
     $targetHealth |
