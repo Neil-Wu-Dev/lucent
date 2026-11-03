@@ -131,12 +131,6 @@ resource "aws_subnet" "database_a" {
   tags = {
     Name = "lucent-private-database-a"
   }
-
-  lifecycle {
-    # A subnet CIDR must be unique within the VPC. If an AZ ever changes,
-    # Terraform must release its existing CIDR before creating its replacement.
-    create_before_destroy = false
-  }
 }
 
 resource "aws_subnet" "database_b" {
@@ -147,12 +141,6 @@ resource "aws_subnet" "database_b" {
 
   tags = {
     Name = "lucent-private-database-b"
-  }
-
-  lifecycle {
-    # database_b currently moves AZ while retaining 10.0.6.0/24. Creating the
-    # replacement first causes AWS InvalidSubnet.Conflict, so destroy first.
-    create_before_destroy = false
   }
 }
 
@@ -667,9 +655,6 @@ resource "aws_launch_template" "backend" {
     }
   }
 
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
 resource "aws_autoscaling_group" "backend" {
