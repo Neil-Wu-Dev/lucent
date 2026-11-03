@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ProjectDir = 'D:\dev\lucent',
-    [string]$StatePath = 'D:\TerraformState\lucent\terraform.tfstate',
-    [string]$BackupDirectory = 'D:\TerraformStateBackups\lucent'
+    [string]$StatePath = 'D:\TerraformState\lucent-sandbox\terraform.tfstate',
+    [string]$BackupDirectory = 'D:\TerraformStateBackups\lucent-sandbox'
 )
 
 $ErrorActionPreference = 'Stop'

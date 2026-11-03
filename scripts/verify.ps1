@@ -43,6 +43,9 @@ if (-not $TerraformDir) {
     $TerraformDir = $matches[0]
 }
 
+$accountVerifier = Join-Path $PSScriptRoot 'assert-aws-account.ps1'
+& $accountVerifier -AwsExe $AwsExe
+
 function Invoke-Native {
     param(
         [string]$Exe,

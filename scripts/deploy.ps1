@@ -48,6 +48,9 @@ if (-not $TerraformDir) {
     $TerraformDir = $matches[0]
 }
 
+$accountVerifier = Join-Path $PSScriptRoot 'assert-aws-account.ps1'
+& $accountVerifier -AwsExe $AwsExe
+
 function Invoke-Native {
     param(
         [string]$Exe,
@@ -330,29 +333,18 @@ $databasePort = [string](Get-Tf 'database_port')
 $databaseName = [string](Get-Tf 'database_name')
 $databaseUsername = [string](Get-Tf 'database_username')
 $databasePassword = [string](Get-Tf 'database_password')
+$bucket = [string](Get-Tf 'deployment_artifact_bucket_name')
 
 if (
     $frontendIds.Count -ne 2 -or
     $backendIds.Count -lt 2 -or
     -not $ecr -or
     -not $databaseEndpoint -or
+    -not $bucket -or
     -not $databasePassword
 ) {
     throw 'Terraform outputs incomplete; refusing to guess infrastructure or database settings.'
 }
-
-$account = (
-    Invoke-Native $AwsExe @(
-        'sts',
-        'get-caller-identity',
-        '--query',
-        'Account',
-        '--output',
-        'text'
-    )
-).Trim()
-
-$bucket = "lucent-deploy-$account"
 
 Write-Host "Frontend EC2: $($frontendIds -join ', ')"
 Write-Host "Backend ASG: $backendAutoScalingGroup"
@@ -389,35 +381,6 @@ $dist = Join-Path $FrontendDir 'dist'
 
 if (-not (Test-Path (Join-Path $dist 'index.html'))) {
     throw 'React build did not produce dist/index.html'
-}
-
-$bucketFound = $false
-
-try {
-    $null = Invoke-Native $AwsExe @(
-        's3api',
-        'head-bucket',
-        '--bucket',
-        $bucket,
-        '--region',
-        $region
-    )
-
-    $bucketFound = $true
-}
-catch {
-    $bucketFound = $false
-}
-
-if (-not $bucketFound) {
-    Invoke-Native $AwsExe @(
-        's3api',
-        'create-bucket',
-        '--bucket',
-        $bucket,
-        '--region',
-        $region
-    ) | Out-Host
 }
 
 Invoke-Native $AwsExe @(

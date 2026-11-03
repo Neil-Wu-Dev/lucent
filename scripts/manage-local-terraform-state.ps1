@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Initialize', 'Backup', 'Verify', 'Restore', 'SelfTest')]
+    [ValidateSet('Initialize', 'Backup', 'BackupIfPresent', 'Verify', 'Restore', 'SelfTest')]
     [string]$Action = 'Initialize',
-    [string]$StatePath = 'D:\TerraformState\lucent\terraform.tfstate',
-    [string]$BackupDirectory = 'D:\TerraformStateBackups\lucent',
+    [string]$StatePath = 'D:\TerraformState\lucent-sandbox\terraform.tfstate',
+    [string]$BackupDirectory = 'D:\TerraformStateBackups\lucent-sandbox',
     [ValidateRange(1, 365)]
     [int]$RetentionCount = 30,
     [string]$RestoreBackup = ''
@@ -239,6 +239,15 @@ switch ($Action) {
     'Backup' {
         $backup = New-StateBackup -SourcePath $StatePath
         Write-Host "Terraform state backup verified: $backup"
+    }
+    'BackupIfPresent' {
+        if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+            $backup = New-StateBackup -SourcePath $StatePath
+            Write-Host "Existing Terraform state backup verified: $backup"
+        }
+        else {
+            Write-Host "No Sandbox Terraform state exists yet; no pre-apply backup is required."
+        }
     }
     'Verify' {
         $active = Get-StateMetadata -Path $StatePath

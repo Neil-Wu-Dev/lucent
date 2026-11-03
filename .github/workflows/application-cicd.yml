@@ -9,9 +9,6 @@ on:
     types: [completed]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: lucent-application-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
@@ -21,6 +18,8 @@ jobs:
     name: Build and test Lucent
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, Windows, X64]
+    permissions:
+      contents: read
 
     steps:
       - name: Check out source
@@ -62,12 +61,15 @@ jobs:
     needs: build-and-test
     if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, Windows, X64]
+    permissions:
+      id-token: write
+      contents: read
     concurrency:
       group: lucent-infrastructure-production
       cancel-in-progress: false
     env:
       AWS_DEFAULT_REGION: us-east-1
-      AWS_SDK_LOAD_CONFIG: "1"
+      AWS_EC2_METADATA_DISABLED: "true"
       TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
 
     steps:
@@ -75,6 +77,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Isolate Runner from persisted AWS credentials
+        shell: powershell
+        run: |
+          @(
+            'AWS_PROFILE',
+            'AWS_DEFAULT_PROFILE',
+            'AWS_SHARED_CREDENTIALS_FILE',
+            'AWS_CONFIG_FILE',
+            'AWS_ACCESS_KEY_ID',
+            'AWS_SECRET_ACCESS_KEY',
+            'AWS_SESSION_TOKEN',
+            'AWS_ROLE_ARN',
+            'AWS_WEB_IDENTITY_TOKEN_FILE'
+          ) | ForEach-Object {
+            "$_=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::228755392058:role/LucentGitHubDeployRole
+          aws-region: us-east-1
+          role-duration-seconds: 3600
+          allowed-account-ids: '228755392058'
+          unset-current-credentials: true
+
+      - name: Verify Sandbox AWS identity
+        shell: powershell
+        run: .\scripts\assert-aws-account.ps1
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -88,18 +120,6 @@ jobs:
         with:
           terraform_version: "1.16.4"
           terraform_wrapper: false
-
-      - name: Verify AWS Academy identity on the self-hosted Runner
-        shell: powershell
-        run: |
-          $credentialsPath = Join-Path $env:USERPROFILE '.aws\credentials'
-          if (-not (Test-Path -LiteralPath $credentialsPath -PathType Leaf)) {
-            throw "AWS Academy credentials are unavailable on this Runner: $credentialsPath"
-          }
-          aws sts get-caller-identity --output json
-          if ($LASTEXITCODE -ne 0) {
-            throw 'The AWS Academy credentials on the self-hosted Runner are expired, invalid, or unavailable.'
-          }
 
       - name: Initialize Terraform Local State
         shell: powershell

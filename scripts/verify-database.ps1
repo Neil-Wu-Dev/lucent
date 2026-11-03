@@ -13,6 +13,9 @@ if (-not $TerraformDir) {
     $TerraformDir = Join-Path $ProjectDir 'infrastructure'
 }
 
+$accountVerifier = Join-Path $PSScriptRoot 'assert-aws-account.ps1'
+& $accountVerifier
+
 function Invoke-Native {
     param([string]$Exe, [string[]]$Arguments)
 

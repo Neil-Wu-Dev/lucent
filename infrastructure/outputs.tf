@@ -52,6 +52,11 @@ output "backend_ecr_repository_url" {
   value       = aws_ecr_repository.backend.repository_url
 }
 
+output "deployment_artifact_bucket_name" {
+  description = "Private S3 bucket used to stage built React deployment artifacts."
+  value       = aws_s3_bucket.deployment_artifacts.bucket
+}
+
 output "backend_alb_dns_name" {
   description = "DNS name of the Internet-facing ALB for Lucent Backend."
   value       = aws_lb.backend.dns_name

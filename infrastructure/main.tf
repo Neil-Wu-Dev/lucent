@@ -3,7 +3,6 @@
 # =========================
 #
 # The application EC2 instances use the latest Amazon Linux 2023 AMI in us-east-1.
-# This keeps the servers simple and matches the AWS Academy-friendly Linux path.
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -14,6 +13,8 @@ data "aws_ami" "amazon_linux" {
     values = ["al2023-ami-2023.*-x86_64"]
   }
 }
+
+data "aws_caller_identity" "current" {}
 
 # =========================
 # VPC
@@ -244,9 +245,7 @@ resource "aws_nat_gateway" "nat" {
 # ECR
 # =========================
 #
-# ECR stores the Lucent Backend Docker image. The repository is created here,
-# but IAM permissions are not created in Terraform because AWS Academy provides
-# LabInstanceProfile / LabRole.
+# ECR stores the Lucent Backend Docker image.
 
 resource "aws_ecr_repository" "backend" {
   name                 = var.backend_ecr_repository_name
@@ -261,13 +260,113 @@ resource "aws_ecr_repository" "backend" {
   }
 }
 
+# The deployment bucket is private staging storage for the built React files.
+# The Runner uploads to it and the private frontend EC2 instances download from
+# it through NAT using their EC2 runtime role.
+resource "aws_s3_bucket" "deployment_artifacts" {
+  bucket = "lucent-deploy-${data.aws_caller_identity.current.account_id}"
+
+  tags = {
+    Name = "lucent-deployment-artifacts"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "deployment_artifacts" {
+  bucket = aws_s3_bucket.deployment_artifacts.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "deployment_artifacts" {
+  bucket = aws_s3_bucket.deployment_artifacts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "deployment_artifacts" {
+  bucket = aws_s3_bucket.deployment_artifacts.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 # =========================
 # EC2 Management
 # =========================
 #
-# AWS Academy does not allow this lab to create IAM roles or instance profiles.
-# The private EC2 instances therefore use the existing LabInstanceProfile,
-# exposed through a variable so the name is explicit and easy to change later.
+# Every private EC2 instance receives this account-owned runtime role. It gives
+# the instances only the permissions needed for SSM management, ECR image pulls,
+# and frontend artifact downloads.
+
+data "aws_iam_policy_document" "ec2_runtime_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ec2_runtime" {
+  name               = "lucent-ec2-runtime-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_runtime_assume_role.json
+
+  tags = {
+    Name = "lucent-ec2-runtime-role"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_ssm" {
+  role       = aws_iam_role.ec2_runtime.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_ecr_read" {
+  role       = aws_iam_role.ec2_runtime.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+resource "aws_iam_role_policy" "ec2_frontend_artifact_read" {
+  name = "lucent-frontend-artifact-read"
+  role = aws_iam_role.ec2_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.deployment_artifacts.arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["frontend/*"]
+          }
+        }
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.deployment_artifacts.arn}/frontend/*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "ec2_runtime" {
+  name = "lucent-ec2-runtime-profile"
+  role = aws_iam_role.ec2_runtime.name
+}
 
 # =========================
 # Security Groups
@@ -466,7 +565,7 @@ resource "aws_launch_template" "backend" {
   update_default_version = true
 
   iam_instance_profile {
-    name = var.ec2_instance_profile_name
+    name = aws_iam_instance_profile.ec2_runtime.name
   }
 
   network_interfaces {
@@ -643,7 +742,7 @@ resource "aws_instance" "frontend_a" {
   subnet_id                   = aws_subnet.app_a.id
   associate_public_ip_address = false
   vpc_security_group_ids      = [aws_security_group.frontend_ec2.id]
-  iam_instance_profile        = var.ec2_instance_profile_name
+  iam_instance_profile        = aws_iam_instance_profile.ec2_runtime.name
   user_data                   = <<-EOF
     #!/bin/bash
     set -euxo pipefail
@@ -694,7 +793,7 @@ resource "aws_instance" "frontend_b" {
   subnet_id                   = aws_subnet.app_b.id
   associate_public_ip_address = false
   vpc_security_group_ids      = [aws_security_group.frontend_ec2.id]
-  iam_instance_profile        = var.ec2_instance_profile_name
+  iam_instance_profile        = aws_iam_instance_profile.ec2_runtime.name
   user_data                   = <<-EOF
     #!/bin/bash
     set -euxo pipefail

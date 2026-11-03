@@ -28,6 +28,9 @@ if (-not $TerraformDir) {
     $TerraformDir = Join-Path $ProjectDir 'infrastructure'
 }
 
+$accountVerifier = Join-Path $PSScriptRoot 'assert-aws-account.ps1'
+& $accountVerifier -AwsExe $AwsExe
+
 function Invoke-Native {
     param(
         [string]$Exe,
@@ -362,7 +365,7 @@ $identity = Invoke-Native -Exe $AwsExe -Arguments @(
     '--output',
     'json'
 ) | ConvertFrom-Json
-Add-Result -Name 'Temporary AWS credentials are usable' -Passed ([bool]$identity.Account) -Detail "Account $($identity.Account), ARN $($identity.Arn)"
+Add-Result -Name 'Sandbox AWS identity is correct' -Passed ($identity.Account -eq '228755392058') -Detail "Account $($identity.Account), ARN $($identity.Arn)"
 
 Write-Host '=== TERRAFORM OUTPUTS ==='
 $backendAutoScalingGroup = [string](Get-Tf 'backend_autoscaling_group_name')

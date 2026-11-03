@@ -1,9 +1,3 @@
-variable "ec2_instance_profile_name" {
-  description = "Existing AWS Academy instance profile attached to private EC2 instances for management access."
-  type        = string
-  default     = "LabInstanceProfile"
-}
-
 variable "backend_ecr_repository_name" {
   description = "ECR repository name for the Lucent Backend Docker image."
   type        = string

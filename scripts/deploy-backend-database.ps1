@@ -13,6 +13,9 @@ if (-not $TerraformDir) {
     $TerraformDir = Join-Path $ProjectDir 'infrastructure'
 }
 
+$accountVerifier = Join-Path $PSScriptRoot 'assert-aws-account.ps1'
+& $accountVerifier
+
 function Invoke-Native {
     param([string]$Exe, [string[]]$Arguments)
 
@@ -36,6 +39,21 @@ function Get-TerraformJsonOutput {
     return Invoke-Native -Exe 'terraform' -Arguments @("-chdir=$TerraformDir", 'output', '-json', $Name)
 }
 
+function Get-AsgInServiceInstanceIds {
+    param([string]$AutoScalingGroupName)
+
+    $raw = Invoke-Native -Exe 'aws' -Arguments @(
+        'autoscaling',
+        'describe-auto-scaling-groups',
+        '--region', $region,
+        '--auto-scaling-group-names', $AutoScalingGroupName,
+        '--query', "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId",
+        '--output', 'json'
+    )
+
+    return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
+}
+
 if (-not $DatabasePassword) {
     $DatabasePassword = Read-Host 'PostgreSQL master password' -AsSecureString
 }
@@ -45,7 +63,12 @@ $databasePort = Get-TerraformOutput 'database_port'
 $databaseName = Get-TerraformOutput 'database_name'
 $databaseUsername = Get-TerraformOutput 'database_username'
 $repositoryUrl = Get-TerraformOutput 'backend_ecr_repository_url'
-$backendInstanceIds = @(Get-TerraformJsonOutput 'backend_instance_ids' | ConvertFrom-Json)
+$backendAutoScalingGroup = Get-TerraformOutput 'backend_autoscaling_group_name'
+$backendInstanceIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
+
+if ($backendInstanceIds.Count -lt 2) {
+    throw "Backend Auto Scaling Group $backendAutoScalingGroup has fewer than two InService instances."
+}
 
 $databasePasswordPlainText = ConvertFrom-SecureString -SecureString $DatabasePassword -AsPlainText
 $databaseUrl = 'jdbc:postgresql://' + $databaseEndpoint + ':' + $databasePort + '/' + $databaseName
