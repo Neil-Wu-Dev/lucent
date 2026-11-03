@@ -14,15 +14,9 @@
         "iam:PutRolePolicy",
         "iam:GetRolePolicy",
         "iam:DeleteRolePolicy",
-        "iam:ListRolePolicies",
-        "iam:PassRole"
+        "iam:ListRolePolicies"
       ],
-      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role",
-      "Condition": {
-        "StringEqualsIfExists": {
-          "iam:PassedToService": "ec2.amazonaws.com"
-        }
-      }
+      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role"
     },
     {
       "Sid": "ManageLucentEc2InstanceProfile",
@@ -41,10 +35,13 @@
     {
       "Sid": "ReadIamRelationshipsNeededByTerraform",
       "Effect": "Allow",
-      "Action": [
-        "iam:ListInstanceProfilesForRole",
-        "iam:ListRoles"
-      ],
+      "Action": "iam:ListInstanceProfilesForRole",
+      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role"
+    },
+    {
+      "Sid": "ListRolesNeededByTerraform",
+      "Effect": "Allow",
+      "Action": "iam:ListRoles",
       "Resource": "*"
     },
     {
@@ -52,16 +49,32 @@
       "Effect": "Allow",
       "Action": [
         "iam:AttachRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:ListAttachedRolePolicies"
+        "iam:DetachRolePolicy"
       ],
       "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role",
       "Condition": {
-        "ForAllValues:StringEquals": {
+        "ArnEquals": {
           "iam:PolicyARN": [
             "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
             "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
           ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadLucentEc2RuntimeRoleAttachments",
+      "Effect": "Allow",
+      "Action": "iam:ListAttachedRolePolicies",
+      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role"
+    },
+    {
+      "Sid": "PassLucentEc2RuntimeRoleToEc2Only",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
         }
       }
     },
