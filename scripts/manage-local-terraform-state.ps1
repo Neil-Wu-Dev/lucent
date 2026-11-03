@@ -63,10 +63,21 @@ function Invoke-NativeCaptured {
         # is available. Keep stderr separate and always inspect the exit code.
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
+        $standardOutput = @()
+        $exitCode = 1
+        $invocationFailure = $null
 
         try {
             $standardOutput = & $Exe @Arguments 2> $errorFile
-            $exitCode = $LASTEXITCODE
+            if ($null -eq $LASTEXITCODE) {
+                $invocationFailure = "Native command did not return an exit code: $Exe"
+            }
+            else {
+                $exitCode = [int]$LASTEXITCODE
+            }
+        }
+        catch {
+            $invocationFailure = $_.Exception.Message
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -79,10 +90,28 @@ function Invoke-NativeCaptured {
             ''
         }
 
+        if ($invocationFailure) {
+            $standardError = (@(
+                    $standardError,
+                    $invocationFailure
+                ) | Where-Object {
+                    -not [string]::IsNullOrWhiteSpace($_)
+                }) -join [Environment]::NewLine
+        }
+
+        $standardOutputText = $standardOutput -join [Environment]::NewLine
+        if ($null -eq $standardOutputText) {
+            $standardOutputText = ''
+        }
+
+        if ($null -eq $standardError) {
+            $standardError = ''
+        }
+
         return [pscustomobject]@{
-            ExitCode      = $exitCode
-            StandardOutput = ($standardOutput -join [Environment]::NewLine).Trim()
-            StandardError  = $standardError.Trim()
+            ExitCode       = $exitCode
+            StandardOutput = [string]$standardOutputText
+            StandardError  = [string]$standardError
         }
     }
     finally {
@@ -147,23 +176,48 @@ function Assert-PrivateAclTree {
         }
 }
 
-function Set-PrivateDirectoryAcl {
-    param([Parameter(Mandatory = $true)][string]$Path)
+function Set-PrivateAclEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][bool]$IsDirectory
+    )
 
-    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $currentGrant = if ($IsDirectory) { "${currentIdentity}:(OI)(CI)F" } else { "${currentIdentity}:F" }
+    $systemGrant = if ($IsDirectory) { 'SYSTEM:(OI)(CI)F' } else { 'SYSTEM:F' }
+    $administratorsGrant = if ($IsDirectory) { 'Administrators:(OI)(CI)F' } else { 'Administrators:F' }
+
     $result = Invoke-NativeCaptured -Exe 'icacls.exe' -Arguments @(
         $Path,
         '/inheritance:r',
         '/grant:r',
-        "*$currentSid`:(OI)(CI)F",
-        '*S-1-5-18:(OI)(CI)F',
-        '*S-1-5-32-544:(OI)(CI)F',
-        '/t',
+        $currentGrant,
+        $systemGrant,
+        $administratorsGrant,
         '/c'
     )
 
     if ($result.ExitCode -ne 0) {
         throw "Could not set the private NTFS ACL for $Path (exit $($result.ExitCode)): $($result.StandardError)"
+    }
+
+}
+
+function Set-PrivateDirectoryAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # Do not use icacls /t with (OI)(CI) grants: those directory inheritance
+    # flags can leave existing files without a usable allow rule. Apply the
+    # correct rule type to every existing directory and file explicitly.
+    Set-PrivateAclEntry -Path $Path -IsDirectory $true
+
+    $children = @(Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction Stop)
+    foreach ($directory in @($children | Where-Object { $_.PSIsContainer })) {
+        Set-PrivateAclEntry -Path $directory.FullName -IsDirectory $true
+    }
+
+    foreach ($file in @($children | Where-Object { -not $_.PSIsContainer })) {
+        Set-PrivateAclEntry -Path $file.FullName -IsDirectory $false
     }
 
     Assert-PrivateAclTree -Path $Path
@@ -172,21 +226,7 @@ function Set-PrivateDirectoryAcl {
 function Set-PrivateFileAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $result = Invoke-NativeCaptured -Exe 'icacls.exe' -Arguments @(
-        $Path,
-        '/inheritance:r',
-        '/grant:r',
-        "*$currentSid`:F",
-        '*S-1-5-18:F',
-        '*S-1-5-32-544:F',
-        '/c'
-    )
-
-    if ($result.ExitCode -ne 0) {
-        throw "Could not set the private NTFS ACL for $Path (exit $($result.ExitCode)): $($result.StandardError)"
-    }
-
+    Set-PrivateAclEntry -Path $Path -IsDirectory $false
     Assert-PrivateAcl -Path $Path
 }
 
