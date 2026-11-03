@@ -8,6 +8,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# OIDC credentials are supplied through AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN. A persisted Runner profile
+# must be absent, rather than set to an empty string, because the AWS CLI
+# interprets an empty AWS_PROFILE as a profile named "".
+@(
+    'AWS_PROFILE',
+    'AWS_DEFAULT_PROFILE',
+    'AWS_SHARED_CREDENTIALS_FILE',
+    'AWS_CONFIG_FILE'
+) | ForEach-Object {
+    Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+}
+
 $errorFile = Join-Path $env:TEMP ('lucent-aws-identity-' + [guid]::NewGuid().ToString() + '.err')
 
 try {

@@ -25,23 +25,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Isolate Runner from persisted AWS credentials
-        shell: powershell
-        run: |
-          @(
-            'AWS_PROFILE',
-            'AWS_DEFAULT_PROFILE',
-            'AWS_SHARED_CREDENTIALS_FILE',
-            'AWS_CONFIG_FILE',
-            'AWS_ACCESS_KEY_ID',
-            'AWS_SECRET_ACCESS_KEY',
-            'AWS_SESSION_TOKEN',
-            'AWS_ROLE_ARN',
-            'AWS_WEB_IDENTITY_TOKEN_FILE'
-          ) | ForEach-Object {
-            "$_=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
-
       - name: Diagnose GitHub OIDC Subject
         shell: powershell
         run: |
@@ -73,6 +56,10 @@ jobs:
       - name: Diagnose assumed AWS identity
         shell: powershell
         run: |
+          @('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE') | ForEach-Object {
+            Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+          }
+
           $previousErrorActionPreference = $ErrorActionPreference
           $ErrorActionPreference = 'Continue'
 
@@ -105,7 +92,11 @@ jobs:
       - name: Initialize Terraform Local State
         shell: powershell
         working-directory: infrastructure
-        run: terraform init -reconfigure
+        run: |
+          @('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE') | ForEach-Object {
+            Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+          }
+          terraform init -reconfigure
 
       - name: Back up existing Sandbox Terraform state
         shell: powershell
@@ -114,22 +105,38 @@ jobs:
       - name: Check Terraform formatting
         shell: powershell
         working-directory: infrastructure
-        run: terraform fmt -check -recursive
+        run: |
+          @('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE') | ForEach-Object {
+            Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+          }
+          terraform fmt -check -recursive
 
       - name: Validate Terraform
         shell: powershell
         working-directory: infrastructure
-        run: terraform validate
+        run: |
+          @('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE') | ForEach-Object {
+            Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+          }
+          terraform validate
 
       - name: Create Terraform plan
         shell: powershell
         working-directory: infrastructure
-        run: terraform plan -out terraform.tfplan
+        run: |
+          @('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE') | ForEach-Object {
+            Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+          }
+          terraform plan -out terraform.tfplan
 
       - name: Apply Terraform plan
         shell: powershell
         working-directory: infrastructure
-        run: terraform apply -auto-approve terraform.tfplan
+        run: |
+          @('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE') | ForEach-Object {
+            Remove-Item -Path ("Env:" + $_) -ErrorAction SilentlyContinue
+          }
+          terraform apply -auto-approve terraform.tfplan
 
       - name: Verify and back up Local Terraform state
         shell: powershell
