@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$region = 'us-east-1'
+$region = 'eu-west-1'
 $results = [System.Collections.Generic.List[object]]::new()
 
 $AwsExe = 'aws'

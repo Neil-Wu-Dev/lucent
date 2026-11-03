@@ -2,7 +2,7 @@
 # AMI
 # =========================
 #
-# The application EC2 instances use the latest Amazon Linux 2023 AMI in us-east-1.
+# The application EC2 instances use the latest Amazon Linux 2023 AMI in eu-west-1.
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -43,7 +43,7 @@ resource "aws_vpc" "lucent_vpc" {
 resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.lucent_vpc.id
   cidr_block              = "10.0.1.0/24"
-  availability_zone       = "us-east-1a"
+  availability_zone       = "eu-west-1"
   map_public_ip_on_launch = false
 
   tags = {
@@ -54,7 +54,7 @@ resource "aws_subnet" "public_a" {
 resource "aws_subnet" "public_b" {
   vpc_id                  = aws_vpc.lucent_vpc.id
   cidr_block              = "10.0.2.0/24"
-  availability_zone       = "us-east-1b"
+  availability_zone       = "eu-west-1"
   map_public_ip_on_launch = false
 
   tags = {
@@ -73,7 +73,7 @@ resource "aws_subnet" "public_b" {
 resource "aws_subnet" "app_a" {
   vpc_id                  = aws_vpc.lucent_vpc.id
   cidr_block              = "10.0.3.0/24"
-  availability_zone       = "us-east-1a"
+  availability_zone       = "eu-west-1"
   map_public_ip_on_launch = false
 
   tags = {
@@ -84,7 +84,7 @@ resource "aws_subnet" "app_a" {
 resource "aws_subnet" "app_b" {
   vpc_id                  = aws_vpc.lucent_vpc.id
   cidr_block              = "10.0.4.0/24"
-  availability_zone       = "us-east-1b"
+  availability_zone       = "eu-west-1"
   map_public_ip_on_launch = false
 
   tags = {
@@ -102,7 +102,7 @@ resource "aws_subnet" "app_b" {
 resource "aws_subnet" "database_a" {
   vpc_id                  = aws_vpc.lucent_vpc.id
   cidr_block              = "10.0.5.0/24"
-  availability_zone       = "us-east-1a"
+  availability_zone       = "eu-west-1"
   map_public_ip_on_launch = false
 
   tags = {
@@ -113,7 +113,7 @@ resource "aws_subnet" "database_a" {
 resource "aws_subnet" "database_b" {
   vpc_id                  = aws_vpc.lucent_vpc.id
   cidr_block              = "10.0.6.0/24"
-  availability_zone       = "us-east-1b"
+  availability_zone       = "eu-west-1"
   map_public_ip_on_launch = false
 
   tags = {
@@ -577,7 +577,7 @@ resource "aws_launch_template" "backend" {
     #!/bin/bash
     set -euxo pipefail
 
-    REGION="us-east-1"
+    REGION="eu-west-1"
     REGISTRY="${split("/", aws_ecr_repository.backend.repository_url)[0]}"
     IMAGE="${aws_ecr_repository.backend.repository_url}:latest"
     DB_URL_BASE64="${base64encode("jdbc:postgresql://${aws_db_instance.lucent.address}:${aws_db_instance.lucent.port}/${var.database_name}")}"

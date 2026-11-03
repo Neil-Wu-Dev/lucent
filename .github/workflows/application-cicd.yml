@@ -68,7 +68,7 @@ jobs:
       group: lucent-infrastructure-production
       cancel-in-progress: false
     env:
-      AWS_DEFAULT_REGION: us-east-1
+      AWS_DEFAULT_REGION: eu-west-1
       AWS_EC2_METADATA_DISABLED: "true"
       TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
 

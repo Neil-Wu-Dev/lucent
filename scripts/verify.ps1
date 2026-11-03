@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$region = 'us-east-1'
+$region = 'eu-west-1'
 
 $AwsExe = 'aws'
 $awsCandidates = @(

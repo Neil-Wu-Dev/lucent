@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$region = 'us-east-1'
+$region = 'eu-west-1'
 
 if (-not $TerraformDir) {
     $TerraformDir = Join-Path $ProjectDir 'infrastructure'

@@ -17,7 +17,7 @@ jobs:
       id-token: write
       contents: read
     env:
-      AWS_DEFAULT_REGION: us-east-1
+      AWS_DEFAULT_REGION: eu-west-1
       AWS_EC2_METADATA_DISABLED: "true"
       TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
 
@@ -48,7 +48,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: arn:aws:iam::228755392058:role/LucentGitHubDeployRole
-          aws-region: us-east-1
+          aws-region: eu-west-1
           role-duration-seconds: 3600
           allowed-account-ids: '228755392058'
           unset-current-credentials: true
