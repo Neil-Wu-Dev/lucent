@@ -49,38 +49,167 @@ function Get-StateMetadata {
     }
 }
 
+function Invoke-NativeCaptured {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Arguments
+    )
+
+    $errorFile = Join-Path $env:TEMP ('lucent-state-' + [guid]::NewGuid().ToString() + '.err')
+
+    try {
+        # In Windows PowerShell 5.1, merging stderr with 2>&1 while the error
+        # preference is Stop can throw NativeCommandError before the exit code
+        # is available. Keep stderr separate and always inspect the exit code.
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+
+        try {
+            $standardOutput = & $Exe @Arguments 2> $errorFile
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        $standardError = if (Test-Path -LiteralPath $errorFile) {
+            Get-Content -LiteralPath $errorFile -Raw
+        }
+        else {
+            ''
+        }
+
+        return [pscustomobject]@{
+            ExitCode      = $exitCode
+            StandardOutput = ($standardOutput -join [Environment]::NewLine).Trim()
+            StandardError  = $standardError.Trim()
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-PrivateAclSids {
+    return @(
+        [Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+        'S-1-5-18',       # Local System
+        'S-1-5-32-544'    # Built-in Administrators
+    )
+}
+
+function Assert-PrivateAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $expectedSids = @(Get-PrivateAclSids)
+    $acl = Get-Acl -LiteralPath $Path
+
+    if (-not $acl.AreAccessRulesProtected) {
+        throw "NTFS ACL inheritance is still enabled for $Path"
+    }
+
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    foreach ($sid in $expectedSids) {
+        $hasFullControl = @(
+            $rules | Where-Object {
+                $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+                $_.IdentityReference.Value -eq $sid -and
+                ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl
+            }
+        ).Count -gt 0
+
+        if (-not $hasFullControl) {
+            throw "Required private NTFS ACL entry is missing for SID $sid on $Path"
+        }
+    }
+
+    $unexpectedAllowRules = @(
+        $rules | Where-Object {
+            $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $_.IdentityReference.Value -notin $expectedSids
+        }
+    )
+
+    if ($unexpectedAllowRules.Count -gt 0) {
+        $identities = $unexpectedAllowRules | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique
+        throw "Unexpected NTFS allow rule(s) remain on ${Path}: $($identities -join ', ')"
+    }
+}
+
+function Assert-PrivateAclTree {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    Assert-PrivateAcl -Path $Path
+
+    Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction Stop |
+        ForEach-Object {
+            Assert-PrivateAcl -Path $_.FullName
+        }
+}
+
 function Set-PrivateDirectoryAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    # icacls changes the DACL only. Unlike Set-Acl with a newly constructed
-    # descriptor, it does not require SeSecurityPrivilege for the SACL.
-    & icacls.exe $Path /inheritance:r /grant:r "${currentIdentity}:(OI)(CI)F" 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' /t /c | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not set the private NTFS ACL for $Path"
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $result = Invoke-NativeCaptured -Exe 'icacls.exe' -Arguments @(
+        $Path,
+        '/inheritance:r',
+        '/grant:r',
+        "*$currentSid`:(OI)(CI)F",
+        '*S-1-5-18:(OI)(CI)F',
+        '*S-1-5-32-544:(OI)(CI)F',
+        '/t',
+        '/c'
+    )
+
+    if ($result.ExitCode -ne 0) {
+        throw "Could not set the private NTFS ACL for $Path (exit $($result.ExitCode)): $($result.StandardError)"
     }
+
+    Assert-PrivateAclTree -Path $Path
 }
 
 function Set-PrivateFileAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    & icacls.exe $Path /inheritance:r /grant:r "${currentIdentity}:F" 'SYSTEM:F' 'Administrators:F' /c | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not set the private NTFS ACL for $Path"
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $result = Invoke-NativeCaptured -Exe 'icacls.exe' -Arguments @(
+        $Path,
+        '/inheritance:r',
+        '/grant:r',
+        "*$currentSid`:F",
+        '*S-1-5-18:F',
+        '*S-1-5-32-544:F',
+        '/c'
+    )
+
+    if ($result.ExitCode -ne 0) {
+        throw "Could not set the private NTFS ACL for $Path (exit $($result.ExitCode)): $($result.StandardError)"
     }
+
+    Assert-PrivateAcl -Path $Path
 }
 
 function Enable-DirectoryEncryption {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    # EFS protects this data at rest without enabling or changing BitLocker.
-    $cipherOutput = & cipher.exe /e /s:$Path 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($cipherOutput -join "`n") -match 'not supported|not support') {
-        Write-Warning "EFS is unavailable for $Path. The private NTFS ACL remains active; no BitLocker setting was changed."
+    # EFS availability is determined by actually requesting encryption, rather
+    # than inferring support from the Windows edition, volume type, or registry.
+    $encryptResult = Invoke-NativeCaptured -Exe 'cipher.exe' -Arguments @('/e', "/s:$Path")
+    if ($encryptResult.ExitCode -ne 0) {
+        $details = @($encryptResult.StandardError, $encryptResult.StandardOutput) -join ' '
+        Write-Warning "EFS encryption is unavailable for $Path (cipher.exe exit $($encryptResult.ExitCode)): $details State is NOT encrypted. Verified private NTFS ACL protection remains active."
         return $false
     }
 
+    $verifyResult = Invoke-NativeCaptured -Exe 'cipher.exe' -Arguments @('/c', $Path)
+    if ($verifyResult.ExitCode -ne 0) {
+        $details = @($verifyResult.StandardError, $verifyResult.StandardOutput) -join ' '
+        Write-Warning "EFS encryption could not be verified for $Path (cipher.exe exit $($verifyResult.ExitCode)): $details State is NOT reported as encrypted. Verified private NTFS ACL protection remains active."
+        return $false
+    }
+
+    Write-Host "EFS encryption enabled and verified for $Path"
     return $true
 }
 
