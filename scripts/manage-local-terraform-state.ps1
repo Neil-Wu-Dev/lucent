@@ -400,41 +400,54 @@ function Invoke-RestoreSelfTest {
     }
 }
 
-switch ($Action) {
-    'Initialize' {
-        Initialize-StateStorage
-        Write-Host "Protected Local State directories are ready: $(Split-Path -Parent $StatePath), $BackupDirectory"
-    }
-    'Backup' {
-        $backup = New-StateBackup -SourcePath $StatePath
-        Write-Host "Terraform state backup verified: $backup"
-    }
-    'BackupIfPresent' {
-        if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+try {
+    switch ($Action) {
+        'Initialize' {
+            Initialize-StateStorage
+            Write-Host "Protected Local State directories are ready: $(Split-Path -Parent $StatePath), $BackupDirectory"
+        }
+        'Backup' {
             $backup = New-StateBackup -SourcePath $StatePath
-            Write-Host "Existing Terraform state backup verified: $backup"
+            Write-Host "Terraform state backup verified: $backup"
         }
-        else {
-            Write-Host "No Sandbox Terraform state exists yet; no pre-apply backup is required."
+        'BackupIfPresent' {
+            if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+                $backup = New-StateBackup -SourcePath $StatePath
+                Write-Host "Existing Terraform state backup verified: $backup"
+            }
+            else {
+                Write-Host "No Sandbox Terraform state exists yet; no pre-apply backup is required."
+            }
+        }
+        'Verify' {
+            $active = Get-StateMetadata -Path $StatePath
+            $backups = @(Get-ChildItem -LiteralPath $BackupDirectory -Filter 'terraform-*.tfstate' -File)
+            if ($backups.Count -eq 0) {
+                throw "No Terraform state backups exist in $BackupDirectory"
+            }
+            foreach ($backup in $backups) {
+                Test-StateBackup -BackupPath $backup.FullName
+            }
+            Write-Host "Terraform state and $($backups.Count) backup(s) passed integrity verification. Serial=$($active.Serial), Resources=$($active.ResourceCount)"
+        }
+        'Restore' {
+            Restore-StateBackup
+            Write-Host 'Terraform state restore passed integrity verification.'
+        }
+        'SelfTest' {
+            Invoke-RestoreSelfTest
+            Write-Host 'Terraform state backup and restore self-test passed.'
         }
     }
-    'Verify' {
-        $active = Get-StateMetadata -Path $StatePath
-        $backups = @(Get-ChildItem -LiteralPath $BackupDirectory -Filter 'terraform-*.tfstate' -File)
-        if ($backups.Count -eq 0) {
-            throw "No Terraform state backups exist in $BackupDirectory"
-        }
-        foreach ($backup in $backups) {
-            Test-StateBackup -BackupPath $backup.FullName
-        }
-        Write-Host "Terraform state and $($backups.Count) backup(s) passed integrity verification. Serial=$($active.Serial), Resources=$($active.ResourceCount)"
-    }
-    'Restore' {
-        Restore-StateBackup
-        Write-Host 'Terraform state restore passed integrity verification.'
-    }
-    'SelfTest' {
-        Invoke-RestoreSelfTest
-        Write-Host 'Terraform state backup and restore self-test passed.'
-    }
+
+    # cipher.exe returns 1 when EFS is unavailable on Windows Home. That result
+    # is handled as an ACL fallback, so do not let its stale native exit code
+    # make a successfully protected state directory fail the workflow step.
+    $global:LASTEXITCODE = 0
+}
+catch {
+    # Preserve a non-zero native-style exit status for callers while rethrowing
+    # the real error so GitHub Actions exposes the failure instead of masking it.
+    $global:LASTEXITCODE = 1
+    throw
 }
