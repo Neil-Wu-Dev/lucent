@@ -70,6 +70,24 @@ jobs:
           allowed-account-ids: '228755392058'
           unset-current-credentials: true
 
+      - name: Diagnose assumed AWS identity
+        shell: powershell
+        run: |
+          $previousErrorActionPreference = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+
+          try {
+            aws sts get-caller-identity --output json
+            $exitCode = $LASTEXITCODE
+          }
+          finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+          }
+
+          if ($exitCode -ne 0) {
+            throw "aws sts get-caller-identity failed with exit code $exitCode."
+          }
+
       - name: Verify Sandbox AWS identity
         shell: powershell
         run: .\scripts\assert-aws-account.ps1

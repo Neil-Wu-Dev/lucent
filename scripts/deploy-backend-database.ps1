@@ -19,12 +19,30 @@ $accountVerifier = Join-Path $PSScriptRoot 'assert-aws-account.ps1'
 function Invoke-Native {
     param([string]$Exe, [string[]]$Arguments)
 
-    $output = & $Exe @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Exe failed (exit $LASTEXITCODE): $($output -join [Environment]::NewLine)"
-    }
+    $errorFile = Join-Path $env:TEMP ('lucent-deploy-db-' + [guid]::NewGuid().ToString() + '.err')
 
-    return ($output -join [Environment]::NewLine).Trim()
+    try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+
+        try {
+            $output = & $Exe @Arguments 2> $errorFile
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($exitCode -ne 0) {
+            $errorText = if (Test-Path -LiteralPath $errorFile) { Get-Content -LiteralPath $errorFile -Raw } else { '' }
+            throw "$Exe failed (exit $exitCode): $errorText"
+        }
+
+        return ($output -join [Environment]::NewLine).Trim()
+    }
+    finally {
+        Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-TerraformOutput {

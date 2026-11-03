@@ -8,9 +8,36 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$identityJson = & $AwsExe sts get-caller-identity --output json 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "Unable to determine the current AWS identity: $($identityJson -join [Environment]::NewLine)"
+$errorFile = Join-Path $env:TEMP ('lucent-aws-identity-' + [guid]::NewGuid().ToString() + '.err')
+
+try {
+    # PowerShell 5.1 turns a native command's stderr into NativeCommandError
+    # when 2>&1 is combined with ErrorActionPreference=Stop. Capture stderr in
+    # a file instead, retain the native exit code, then report both streams.
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    try {
+        $identityJson = & $AwsExe sts get-caller-identity --output json 2> $errorFile
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        $errorText = if (Test-Path -LiteralPath $errorFile) {
+            Get-Content -LiteralPath $errorFile -Raw
+        }
+        else {
+            ''
+        }
+
+        throw "Unable to determine the current AWS identity (exit $exitCode): $errorText"
+    }
+}
+finally {
+    Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
 }
 
 try {
