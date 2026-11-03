@@ -95,6 +95,25 @@ jobs:
             "$_=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
 
+      - name: Diagnose GitHub OIDC Subject
+        shell: pwsh
+        run: |
+          $uri = "$env:ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com"
+
+          $response = Invoke-RestMethod -Uri $uri -Headers @{
+            Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+          }
+
+          $part = $response.value.Split('.')[1].Replace('-', '+').Replace('_', '/')
+          $part += '=' * ((4 - ($part.Length % 4)) % 4)
+
+          $claims = [System.Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($part)
+          ) | ConvertFrom-Json
+
+          Write-Host "OIDC audience: $($claims.aud)"
+          Write-Host "OIDC subject: $($claims.sub)"
+
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
