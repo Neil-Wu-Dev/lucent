@@ -209,3 +209,5 @@ switch ($Action) {
         Write-Host "CodeDeploy ASG integration verified for $($configuration.AutoScalingGroup)."
     }
 }
+
+$global:LASTEXITCODE = 0
