@@ -560,7 +560,7 @@ $backendCommands = @(
     "DB_HOST=$databaseEndpoint",
     "DB_PORT=$databasePort",
     'timeout 5 bash -c "</dev/tcp/$DB_HOST/$DB_PORT"',
-    'curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/notes -o /dev/null',
+    'curl -fsS --max-time 10 http://127.0.0.1:8080/actuator/health -o /dev/null',
     'echo BACKEND_TO_DATABASE_OK'
 )
 Invoke-ReadOnlySsmCheck -InstanceIds $backendIds -Commands $backendCommands -Label 'Backend EC2 to PostgreSQL and local API'

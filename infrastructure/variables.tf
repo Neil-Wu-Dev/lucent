@@ -88,3 +88,21 @@ variable "frontend_nginx_port" {
   type        = number
   default     = 80
 }
+
+variable "codedeploy_application_name" {
+  description = "CodeDeploy Server application name for immutable Lucent Backend revisions."
+  type        = string
+  default     = "lucent-backend"
+}
+
+variable "codedeploy_deployment_group_name" {
+  description = "CodeDeploy deployment group for the Lucent Backend."
+  type        = string
+  default     = "lucent-backend-production"
+}
+
+variable "codedeploy_enable_asg_integration" {
+  description = "Persistent Stage B switch. Pipelines derive it from the successful CodeDeploy marker and current Deployment Group association; false uses tagged current Backend instances, true attaches CodeDeploy to the Backend ASG lifecycle."
+  type        = bool
+  default     = false
+}

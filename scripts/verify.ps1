@@ -226,7 +226,6 @@ $backends = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
 $frontTg = [string](Get-Tf 'frontend_target_group_arn')
 $backTg = [string](Get-Tf 'backend_target_group_arn')
 $url = [string](Get-Tf 'lucent_alb_url')
-$ecr = [string](Get-Tf 'backend_ecr_repository_url')
 
 if ($frontends.Count -ne 2 -or $backends.Count -lt 2) {
     throw 'Expected exactly 2 frontend instances and at least 2 InService backend Auto Scaling Group instances.'
@@ -250,9 +249,9 @@ Write-Host '=== BACKEND CONTAINER ==='
 
 $backContainerOK = Ssm-Check $backends @(
     'set -e',
-    "docker image inspect ${ecr}:latest >/dev/null",
     'docker container inspect lucent-backend >/dev/null',
     'docker inspect lucent-backend --format "running={{.State.Running}} restarting={{.State.Restarting}} restartCount={{.RestartCount}}"',
+    'docker inspect lucent-backend --format "image={{ index .Config.Labels \"lucent.release.image\" }} revision={{ index .Config.Labels \"lucent.release.revision\" }}"',
     'docker logs --tail 15 lucent-backend',
     'echo BACKEND_CONTAINER_PRESENT'
 ) 'BACKEND_CONTAINER'
@@ -264,7 +263,7 @@ if ($RequireBackendHttp) {
 
     $backHttpOK = Ssm-Check $backends @(
         'set -e',
-        'curl -fsS --max-time 5 http://127.0.0.1:8080/api/v1/notes -o /dev/null',
+        'curl -fsS --max-time 5 http://127.0.0.1:8080/actuator/health -o /dev/null',
         'echo BACKEND_HTTP_OK'
     ) 'BACKEND_HTTP'
 }

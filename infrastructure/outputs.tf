@@ -57,6 +57,21 @@ output "deployment_artifact_bucket_name" {
   value       = aws_s3_bucket.deployment_artifacts.bucket
 }
 
+output "backend_codedeploy_application_name" {
+  description = "CodeDeploy Server application that deploys immutable Lucent Backend revisions."
+  value       = aws_codedeploy_app.backend.name
+}
+
+output "backend_codedeploy_deployment_group_name" {
+  description = "CodeDeploy deployment group for the Lucent Backend."
+  value       = aws_codedeploy_deployment_group.backend.deployment_group_name
+}
+
+output "backend_database_runtime_secret_arn" {
+  description = "Secrets Manager ARN read by Backend CodeDeploy hooks for database runtime configuration."
+  value       = aws_secretsmanager_secret.backend_database_runtime.arn
+}
+
 output "backend_alb_dns_name" {
   description = "DNS name of the Internet-facing ALB for Lucent Backend."
   value       = aws_lb.backend.dns_name

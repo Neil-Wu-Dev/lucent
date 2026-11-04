@@ -101,7 +101,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: arn:aws:iam::228755392058:role/LucentGitHubDeployRole
-          aws-region: us-east-1
+          aws-region: eu-west-1
           role-duration-seconds: 3600
           allowed-account-ids: '228755392058'
           unset-current-credentials: true
@@ -158,10 +158,26 @@ jobs:
         shell: powershell
         run: .\scripts\deploy.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
 
-      - name: Verify application deployment
+      - name: Verify application before CodeDeploy ASG integration
         shell: powershell
         run: .\scripts\verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -RequireBackendHttp
 
-      - name: Verify deployed security
+      - name: Verify Stage A deployment security
+        shell: powershell
+        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci
+
+      - name: Mark successful CodeDeploy release
+        shell: powershell
+        run: .\scripts\codedeploy-asg-integration-state.ps1 -Action MarkSuccessfulStageA -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
+      - name: Promote CodeDeploy Deployment Group to Backend ASG integration
+        shell: powershell
+        run: .\scripts\promote-codedeploy-asg-integration.ps1 -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
+      - name: Verify CodeDeploy ASG integration
+        shell: powershell
+        run: .\scripts\codedeploy-asg-integration-state.ps1 -Action VerifyEnabled -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
+      - name: Verify final deployed security
         shell: powershell
         run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci

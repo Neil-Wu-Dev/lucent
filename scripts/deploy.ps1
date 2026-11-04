@@ -274,31 +274,6 @@ function Wait-ForSsmManagedInstances(
     }
 }
 
-function Login-EcrDocker(
-    [string]$Registry,
-    [string]$Label
-) {
-    Write-Host "=== ${Label}: Docker login to ECR ==="
-
-    Invoke-Native 'docker' @('logout', $Registry) | Out-Null
-
-    $loginCommand = "`"$AwsExe`" ecr get-login-password --region $region | docker login --username AWS --password-stdin $Registry"
-    $old = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-
-    try {
-        cmd.exe /d /s /c $loginCommand
-        $loginCode = $LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $old
-    }
-
-    if ($loginCode -ne 0) {
-        throw "$Label Docker ECR login failed"
-    }
-}
-
 if ($ApplyInfrastructure) {
     Write-Host '=== TERRAFORM: create or update infrastructure, including private RDS ==='
 
@@ -326,22 +301,16 @@ Write-Host '=== Terraform outputs ==='
 $frontendIds = @(Get-TfStringList 'frontend_instance_ids')
 $backendAutoScalingGroup = [string](Get-Tf 'backend_autoscaling_group_name')
 $backendIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
-$ecr = [string](Get-Tf 'backend_ecr_repository_url')
 $alb = [string](Get-Tf 'lucent_alb_url')
 $databaseEndpoint = [string](Get-Tf 'database_endpoint')
 $databasePort = [string](Get-Tf 'database_port')
-$databaseName = [string](Get-Tf 'database_name')
-$databaseUsername = [string](Get-Tf 'database_username')
-$databasePassword = [string](Get-Tf 'database_password')
 $bucket = [string](Get-Tf 'deployment_artifact_bucket_name')
 
 if (
     $frontendIds.Count -ne 2 -or
     $backendIds.Count -lt 2 -or
-    -not $ecr -or
     -not $databaseEndpoint -or
-    -not $bucket -or
-    -not $databasePassword
+    -not $bucket
 ) {
     throw 'Terraform outputs incomplete; refusing to guess infrastructure or database settings.'
 }
@@ -417,96 +386,17 @@ if (-not $frontOK) {
 }
 
 # ==========================================================
-# BACKEND
+# BACKEND (CodeDeploy)
 # ==========================================================
 
-Write-Host '=== BACKEND: build and push ==='
+Write-Host '=== BACKEND: deploy immutable revision through CodeDeploy ==='
 
-if (-not (Test-Path (Join-Path $BackendDir 'Dockerfile'))) {
-    throw "Missing backend Dockerfile: $BackendDir. Pass -BackendDir with correct folder."
-}
-
-Push-Location $BackendDir
-
-try {
-    Invoke-Native 'docker' @(
-        'build',
-        '-t',
-        'lucent-backend:latest',
-        '.'
-    ) | Out-Host
-}
-finally {
-    Pop-Location
-}
-
-$registry = $ecr.Split('/')[0]
-
-Login-EcrDocker $registry 'LOCAL'
-
-$databaseUrl = 'jdbc:postgresql://' + $databaseEndpoint + ':' + $databasePort + '/' + $databaseName
-$databaseUrlBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($databaseUrl))
-$databaseUsernameBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($databaseUsername))
-$databasePasswordBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($databasePassword))
-
-$image = "${ecr}:latest"
-
-Invoke-Native 'docker' @(
-    'tag',
-    'lucent-backend:latest',
-    $image
-) | Out-Host
-
-Invoke-Native 'docker' @(
-    'push',
-    $image
-) | Out-Host
-
-$backCommands = @(
-    'set -e',
-    $ensureAwsCli,
-    'if ! command -v docker >/dev/null 2>&1; then dnf install -y docker; fi',
-    'systemctl enable docker',
-    'systemctl start docker',
-    "REGION=$region",
-    "REGISTRY=$registry",
-    "IMAGE=$image",
-    "DB_URL_BASE64=$databaseUrlBase64",
-    "DB_USERNAME_BASE64=$databaseUsernameBase64",
-    "DB_PASSWORD_BASE64=$databasePasswordBase64",
-    'DB_URL="$(echo "$DB_URL_BASE64" | base64 -d)"',
-    'DB_USERNAME="$(echo "$DB_USERNAME_BASE64" | base64 -d)"',
-    'DB_PASSWORD="$(echo "$DB_PASSWORD_BASE64" | base64 -d)"',
-    'aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"',
-    'docker pull "$IMAGE"',
-    'docker image inspect "$IMAGE" >/dev/null',
-    'if docker container inspect lucent-backend >/dev/null 2>&1; then docker rm -f lucent-backend; fi',
-    'docker run -d --name lucent-backend --restart unless-stopped -p 8080:8080 -e DB_URL="$DB_URL" -e DB_USERNAME="$DB_USERNAME" -e DB_PASSWORD="$DB_PASSWORD" "$IMAGE"',
-    'sleep 12',
-    'docker container inspect lucent-backend >/dev/null',
-    'docker ps --all --filter name=lucent-backend',
-    'docker logs --tail 25 lucent-backend',
-    'echo BACKEND_IMAGE_AND_CONTAINER_DEPLOYED'
-)
-
-# Scale-out can occur while the frontend upload and image build are running.
-# Discover the ASG again so every currently active backend receives this release.
-$backendIds = @(Get-AsgInServiceInstanceIds $backendAutoScalingGroup)
-
-if ($backendIds.Count -lt 2) {
-    throw "Backend Auto Scaling Group $backendAutoScalingGroup has fewer than two InService instances."
-}
-
-Wait-ForSsmManagedInstances -Ids $backendIds
-
-$backOK = Run-Remote $backendIds $backCommands 'BACKEND'
-
-if (-not $backOK) {
-    throw 'Backend image/container deployment failed.'
-}
+& (Join-Path $PSScriptRoot 'deploy-backend-codedeploy.ps1') `
+    -ProjectDir $ProjectDir `
+    -TerraformDir $TerraformDir `
+    -BackendDir $BackendDir
 
 Write-Host '=== DEPLOYMENT COMMANDS FINISHED ==='
 Write-Host "ALB: $alb"
-Write-Host ('RDS: ' + $databaseEndpoint + ':' + $databasePort)
-Write-Host 'Backend containers received their private PostgreSQL connection settings.'
+Write-Host 'Backend deployment is managed by CodeDeploy; SSM was used only for frontend delivery and one-time CodeDeploy Agent bootstrap.'
 Write-Host 'Run .\scripts\verify.ps1 for independent health verification.'

@@ -33,6 +33,23 @@
       "Resource": "arn:aws:iam::228755392058:instance-profile/lucent-ec2-runtime-profile"
     },
     {
+      "Sid": "ManageLucentCodeDeployServiceRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::228755392058:role/lucent-codedeploy-service-role"
+    },
+    {
       "Sid": "ReadIamRelationshipsNeededByTerraform",
       "Effect": "Allow",
       "Action": "iam:ListInstanceProfilesForRole",
@@ -75,6 +92,70 @@
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "PassLucentCodeDeployServiceRoleToCodeDeployOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::228755392058:role/lucent-codedeploy-service-role",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "codedeploy.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ManageLucentBackendCodeDeploy",
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:CreateApplication",
+        "codedeploy:DeleteApplication",
+        "codedeploy:GetApplication",
+        "codedeploy:UpdateApplication"
+      ],
+      "Resource": "arn:aws:codedeploy:eu-west-1:228755392058:application:lucent-backend"
+    },
+    {
+      "Sid": "ManageLucentBackendCodeDeployGroup",
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:CreateDeploymentGroup",
+        "codedeploy:DeleteDeploymentGroup",
+        "codedeploy:GetDeploymentGroup",
+        "codedeploy:UpdateDeploymentGroup"
+      ],
+      "Resource": "arn:aws:codedeploy:eu-west-1:228755392058:deploymentgroup:lucent-backend/lucent-backend-production"
+    },
+    {
+      "Sid": "DeployAndObserveLucentBackendRevisions",
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:CreateDeployment",
+        "codedeploy:GetDeployment",
+        "codedeploy:GetDeploymentInstance",
+        "codedeploy:ListDeploymentInstances"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PublishLucentCodeDeployRevisions",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::lucent-deploy-228755392058/codedeploy/backend/*"
+    },
+    {
+      "Sid": "ListLucentCodeDeployRevisionPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::lucent-deploy-228755392058",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "codedeploy/backend/*"
         }
       }
     },

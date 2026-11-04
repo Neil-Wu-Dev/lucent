@@ -386,6 +386,43 @@ resource "aws_iam_role_policy" "ec2_frontend_artifact_read" {
   })
 }
 
+# CodeDeploy revisions are private S3 objects. Backend instances read only the
+# revision prefix and their database runtime configuration secret; the GitHub
+# deployment identity uploads revisions and starts deployments separately.
+resource "aws_iam_role_policy" "ec2_codedeploy_runtime" {
+  name = "lucent-codedeploy-runtime"
+  role = aws_iam_role.ec2_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ReadCodeDeployRevisions"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.deployment_artifacts.arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["codedeploy/backend/*"]
+          }
+        }
+      },
+      {
+        Sid      = "ReadCodeDeployRevisionObjects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.deployment_artifacts.arn}/codedeploy/backend/*"
+      },
+      {
+        Sid      = "ReadBackendDatabaseRuntimeConfiguration"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = aws_secretsmanager_secret.backend_database_runtime.arn
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2_runtime" {
   name = "lucent-ec2-runtime-profile"
   role = aws_iam_role.ec2_runtime.name
@@ -578,8 +615,8 @@ resource "aws_lb_listener_rule" "api_to_backend" {
 # =========================
 #
 # The launch template defines an identical, private runtime for every backend
-# instance. Its startup process makes a new ASG instance independently able to
-# run the current backend container and register as a healthy ALB target.
+# instance. It installs Docker, SSM, and CodeDeploy Agent only. CodeDeploy
+# receives the immutable application revision and starts the backend container.
 
 resource "aws_launch_template" "backend" {
   name_prefix            = "lucent-backend-"
@@ -601,11 +638,6 @@ resource "aws_launch_template" "backend" {
     set -euxo pipefail
 
     REGION="eu-west-1"
-    REGISTRY="${split("/", aws_ecr_repository.backend.repository_url)[0]}"
-    IMAGE="${aws_ecr_repository.backend.repository_url}:latest"
-    DB_URL_BASE64="${base64encode("jdbc:postgresql://${aws_db_instance.lucent.address}:${aws_db_instance.lucent.port}/${var.database_name}")}"
-    DB_USERNAME_BASE64="${base64encode(var.database_username)}"
-    DB_PASSWORD_BASE64="${base64encode(var.database_password)}"
 
     if ! command -v amazon-ssm-agent >/dev/null 2>&1; then
       dnf install -y amazon-ssm-agent
@@ -621,28 +653,15 @@ resource "aws_launch_template" "backend" {
       dnf install -y awscli || dnf install -y awscli2 || dnf install -y aws-cli
     fi
 
-    DB_URL="$$(echo "$$DB_URL_BASE64" | base64 -d)"
-    DB_USERNAME="$$(echo "$$DB_USERNAME_BASE64" | base64 -d)"
-    DB_PASSWORD="$$(echo "$$DB_PASSWORD_BASE64" | base64 -d)"
-
-    # The first infrastructure deployment creates an empty ECR repository.
-    # Do not fail instance initialization before Application CI/CD publishes the
-    # first image; SSM is already ready for that deployment. On later scale-out,
-    # the published image is present and each new instance starts itself.
-    if aws ecr describe-images --region "$$REGION" --repository-name "${var.backend_ecr_repository_name}" --image-ids imageTag=latest >/dev/null 2>&1; then
-      aws ecr get-login-password --region "$$REGION" | docker login --username AWS --password-stdin "$$REGISTRY"
-      docker pull "$$IMAGE"
-      if docker container inspect lucent-backend >/dev/null 2>&1; then
-        docker rm -f lucent-backend
-      fi
-      docker run -d --name lucent-backend --restart unless-stopped -p ${var.backend_container_port}:${var.backend_container_port} \
-        -e DB_URL="$$DB_URL" \
-        -e DB_USERNAME="$$DB_USERNAME" \
-        -e DB_PASSWORD="$$DB_PASSWORD" \
-        "$$IMAGE"
-    else
-      echo "Lucent Backend image is not published yet; waiting for Application CI/CD deployment."
+    if ! systemctl list-unit-files codedeploy-agent.service >/dev/null 2>&1; then
+      dnf install -y ruby wget curl
+      cd /tmp
+      wget -q -O codedeploy-install "https://aws-codedeploy-$${REGION}.s3.$${REGION}.amazonaws.com/latest/install"
+      chmod +x codedeploy-install
+      ./codedeploy-install auto
     fi
+    systemctl enable --now codedeploy-agent
+    systemctl is-active --quiet codedeploy-agent
   EOF
   )
 
@@ -677,15 +696,9 @@ resource "aws_autoscaling_group" "backend" {
     version = "$Latest"
   }
 
-  instance_refresh {
-    strategy = "Rolling"
-
-    preferences {
-      instance_warmup        = var.backend_instance_warmup_seconds
-      min_healthy_percentage = 50
-    }
-
-  }
+  # Do not automatically refresh the current Backend fleet when the launch
+  # template gains CodeDeploy Agent during Stage A. CodeDeploy's Stage B ASG
+  # integration deploys the latest successful revision to future replacements.
 
   tag {
     key                 = "Name"

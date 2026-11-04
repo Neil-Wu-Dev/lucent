@@ -98,6 +98,10 @@ jobs:
           }
           terraform init -reconfigure
 
+      - name: Resolve persistent CodeDeploy ASG integration state
+        shell: powershell
+        run: .\scripts\codedeploy-asg-integration-state.ps1 -Action ResolveForInfrastructure -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
       - name: Back up existing Sandbox Terraform state
         shell: powershell
         run: .\scripts\manage-local-terraform-state.ps1 -Action BackupIfPresent
