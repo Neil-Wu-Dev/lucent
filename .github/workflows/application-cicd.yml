@@ -158,15 +158,10 @@ jobs:
         shell: powershell
         run: .\scripts\deploy.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
 
-      - name: Verify application before CodeDeploy ASG integration
-        shell: powershell
-        run: .\scripts\verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -RequireBackendHttp
-
-      - name: Verify Stage A deployment security
-        shell: powershell
-        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci
-
-      - name: Mark successful CodeDeploy release
+      # deploy.ps1 waits for CodeDeploy's successful lifecycle result. Do not
+      # require every pre-existing ASG instance to be healthy here: instances
+      # created before ASG integration have not yet received a revision.
+      - name: Record successful CodeDeploy release for ASG promotion
         shell: powershell
         run: .\scripts\codedeploy-asg-integration-state.ps1 -Action MarkSuccessfulStageA -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
 
@@ -177,6 +172,14 @@ jobs:
       - name: Verify CodeDeploy ASG integration
         shell: powershell
         run: .\scripts\codedeploy-asg-integration-state.ps1 -Action VerifyEnabled -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
+      - name: Converge current Backend ASG through CodeDeploy
+        shell: powershell
+        run: .\scripts\reconcile-backend-codedeploy-asg.ps1 -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
+      - name: Verify fully converged application
+        shell: powershell
+        run: .\scripts\verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -RequireBackendHttp
 
       - name: Verify final deployed security
         shell: powershell

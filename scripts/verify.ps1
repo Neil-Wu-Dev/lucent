@@ -112,6 +112,58 @@ function Get-AsgInServiceInstanceIds([string]$AutoScalingGroupName) {
     return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
 }
 
+function Wait-ForHealthyBackendTargets {
+    param(
+        [string]$TargetGroupArn,
+        [string[]]$ExpectedInstanceIds,
+        [int]$TimeoutSeconds = 300,
+        [int]$PollIntervalSeconds = 10,
+        [int]$RequiredConsecutiveHealthyPolls = 2
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $consecutiveHealthyPolls = 0
+    $lastTargetHealth = @()
+
+    do {
+        $raw = Invoke-Native $AwsExe @(
+            'elbv2',
+            'describe-target-health',
+            '--region',
+            $region,
+            '--target-group-arn',
+            $TargetGroupArn,
+            '--output',
+            'json'
+        )
+        $lastTargetHealth = @(($raw | ConvertFrom-Json).TargetHealthDescriptions)
+        $healthyIds = @(
+            $lastTargetHealth |
+            Where-Object { $_.TargetHealth.State -eq 'healthy' } |
+            ForEach-Object { [string]$_.Target.Id }
+        )
+        $missingHealthyIds = @($ExpectedInstanceIds | Where-Object { $_ -notin $healthyIds })
+
+        if ($missingHealthyIds.Count -eq 0) {
+            $consecutiveHealthyPolls++
+            if ($consecutiveHealthyPolls -ge $RequiredConsecutiveHealthyPolls) {
+                return $lastTargetHealth
+            }
+        }
+        else {
+            $consecutiveHealthyPolls = 0
+            Write-Host "Waiting for Backend ALB health: $($missingHealthyIds -join ', ')"
+        }
+
+        if ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds $PollIntervalSeconds
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    $lastTargetHealth | ConvertTo-Json -Depth 8 | Write-Host
+    throw "Timed out waiting for every current Backend ASG instance to be healthy in the ALB Target Group."
+}
+
 function Ssm-Check(
     [string[]]$Ids,
     [string[]]$Commands,
@@ -273,6 +325,9 @@ else {
 }
 
 Write-Host '=== TARGET GROUPS ==='
+
+$backendTargetHealth = Wait-ForHealthyBackendTargets -TargetGroupArn $backTg -ExpectedInstanceIds $backends
+Write-Host 'All current Backend ASG instances are ALB healthy for two consecutive checks.'
 
 foreach ($entry in @(
         @('FRONTEND', $frontTg),
