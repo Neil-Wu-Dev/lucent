@@ -159,7 +159,7 @@ if ($currentBackendIds.Count -lt 2) {
     throw "Backend ASG $autoScalingGroupName has fewer than two InService instances; refusing a convergence deployment."
 }
 
-Write-Host "Converging current Backend ASG instances with successful revision from $sourceDeploymentId: $($currentBackendIds -join ', ')"
+Write-Host "Converging current Backend ASG instances with successful revision from ${sourceDeploymentId}: $($currentBackendIds -join ', ')"
 $convergenceDeploymentId = (Invoke-Native -Exe $AwsExe -Arguments @(
         'deploy', 'create-deployment', '--region', $region,
         '--application-name', $applicationName,
