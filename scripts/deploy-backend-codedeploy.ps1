@@ -84,6 +84,12 @@ function Get-AsgInServiceInstanceIds {
     return @(($raw | ConvertFrom-Json) | ForEach-Object { [string]$_ })
 }
 
+function Test-SameInstanceIdSet {
+    param([string[]]$Left, [string[]]$Right)
+
+    return ((@($Left | Sort-Object) -join ',') -eq (@($Right | Sort-Object) -join ','))
+}
+
 function Wait-ForSsmManagedInstances {
     param([string[]]$InstanceIds, [int]$TimeoutSeconds = 600)
 
@@ -176,6 +182,48 @@ function Invoke-SsmBootstrap {
     finally {
         Remove-Item -LiteralPath $parameterFile -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Invoke-SsmBootstrapForCurrentAsg {
+    param(
+        [Parameter(Mandatory = $true)][string]$AutoScalingGroupName,
+        [Parameter(Mandatory = $true)][string[]]$Commands,
+        [int]$TimeoutSeconds = 1200
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $candidateIds = @(Get-AsgInServiceInstanceIds -AutoScalingGroupName $AutoScalingGroupName)
+        if ($candidateIds.Count -lt 2) {
+            Write-Host "Waiting for Backend ASG $AutoScalingGroupName to have two InService instances."
+            Start-Sleep -Seconds 10
+            continue
+        }
+
+        try {
+            Wait-ForSsmManagedInstances -InstanceIds $candidateIds -TimeoutSeconds 600
+            Invoke-SsmBootstrap -InstanceIds $candidateIds -Commands $Commands
+        }
+        catch {
+            $currentIds = @(Get-AsgInServiceInstanceIds -AutoScalingGroupName $AutoScalingGroupName)
+            if (-not (Test-SameInstanceIdSet -Left $candidateIds -Right $currentIds)) {
+                Write-Warning "Backend ASG membership changed during CodeDeploy Agent bootstrap; retrying only current InService instances."
+                Start-Sleep -Seconds 10
+                continue
+            }
+            throw
+        }
+
+        $currentIds = @(Get-AsgInServiceInstanceIds -AutoScalingGroupName $AutoScalingGroupName)
+        if (Test-SameInstanceIdSet -Left $candidateIds -Right $currentIds) {
+            return $currentIds
+        }
+
+        Write-Warning "Backend ASG membership changed after CodeDeploy Agent bootstrap; reconciling the current InService instances."
+        Start-Sleep -Seconds 10
+    }
+
+    throw "Timed out reconciling CodeDeploy Agent bootstrap with the current Backend ASG membership."
 }
 
 function Login-EcrDocker {
@@ -491,30 +539,37 @@ if ($RevisionId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
     throw "RevisionId contains unsupported characters: $RevisionId"
 }
 
-$backendIds = @(Get-AsgInServiceInstanceIds -AutoScalingGroupName $autoScalingGroup)
-if ($backendIds.Count -lt 2) {
-    throw "Backend ASG $autoScalingGroup has fewer than two InService instances."
-}
-
-Wait-ForSsmManagedInstances -InstanceIds $backendIds
-
 $agentBootstrap = @(
     'set -euo pipefail',
     "REGION=$region",
-    'if ! command -v docker >/dev/null 2>&1; then dnf install -y docker; fi',
-    'systemctl enable --now docker',
-    'if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli || dnf install -y awscli2 || dnf install -y aws-cli; fi',
-    'if ! systemctl list-unit-files codedeploy-agent.service >/dev/null 2>&1; then',
-    '  dnf install -y ruby wget',
+    'LUCENT_PACKAGE_LOCK="/var/lock/lucent-package-bootstrap.lock"',
+    'fail() { echo "LUCENT_CODEDEPLOY_BOOTSTRAP_ERROR: $*" >&2; exit 1; }',
+    'if ! command -v cloud-init >/dev/null 2>&1; then fail "cloud-init is required on the Backend AMI"; fi',
+    'if ! timeout 900 cloud-init status --wait; then cloud-init status --long || true; fail "cloud-init did not complete successfully within 900 seconds"; fi',
+    'if ! command -v flock >/dev/null 2>&1; then fail "flock is required to serialize Lucent package installation"; fi',
+    'exec 9>"$LUCENT_PACKAGE_LOCK"',
+    'flock -w 900 9 || fail "timed out waiting for the Lucent package-installation lock"',
+    'package_manager_busy() { pgrep -x dnf >/dev/null 2>&1 || pgrep -x yum >/dev/null 2>&1 || pgrep -x rpm >/dev/null 2>&1 || fuser /var/lib/rpm/Packages /var/cache/dnf >/dev/null 2>&1; }',
+    'wait_for_package_manager() { local deadline=$((SECONDS + 600)); while package_manager_busy; do if (( SECONDS >= deadline )); then return 1; fi; echo "Waiting for an existing DNF/RPM transaction to finish..."; sleep 5; done; return 0; }',
+    'dnf_install() { local attempt=1 max_attempts=3 log_file; while (( attempt <= max_attempts )); do if ! wait_for_package_manager; then echo "LUCENT_CODEDEPLOY_BOOTSTRAP_ERROR: timed out waiting for DNF/RPM before installing: $*" >&2; return 1; fi; log_file=$(mktemp /tmp/lucent-dnf.XXXXXX); if dnf install -y "$@" 2>&1 | tee "$log_file"; then rm -f "$log_file"; return 0; fi; if grep -Eq ''No such file or directory|Cannot open.*\.rpm|Failed to open.*\.rpm'' "$log_file"; then if ! wait_for_package_manager; then rm -f "$log_file"; return 1; fi; echo "Recovering a missing cached RPM before retry $attempt/$max_attempts..."; dnf clean all || { rm -f "$log_file"; return 1; }; dnf makecache --refresh || { rm -f "$log_file"; return 1; }; fi; rm -f "$log_file"; if (( attempt == max_attempts )); then echo "LUCENT_CODEDEPLOY_BOOTSTRAP_ERROR: DNF failed after $max_attempts attempts while installing: $*" >&2; return 1; fi; attempt=$((attempt + 1)); sleep 5; done; }',
+    'ensure_active_service() { systemctl enable --now "$1"; systemctl is-active --quiet "$1" || fail "$1 is not active"; }',
+    'if ! command -v docker >/dev/null 2>&1; then dnf_install docker || fail "could not install docker"; fi',
+    'ensure_active_service docker',
+    'if ! command -v aws >/dev/null 2>&1; then dnf_install awscli || dnf_install awscli2 || dnf_install aws-cli || fail "could not install an AWS CLI package"; fi',
+    'if ! test -x /opt/codedeploy-agent/bin/codedeploy-agent; then',
+    '  dnf_install ruby wget || fail "could not install Ruby and wget for CodeDeploy Agent"',
     '  wget -q -O /tmp/codedeploy-install "https://aws-codedeploy-${REGION}.s3.${REGION}.amazonaws.com/latest/install"',
     '  chmod +x /tmp/codedeploy-install',
     '  /tmp/codedeploy-install auto',
     'fi',
-    'systemctl enable --now codedeploy-agent',
-    'systemctl is-active --quiet codedeploy-agent',
+    'ensure_active_service codedeploy-agent',
+    'command -v docker >/dev/null 2>&1 || fail "docker executable is missing"',
+    'command -v aws >/dev/null 2>&1 || fail "AWS CLI executable is missing"',
+    'test -x /opt/codedeploy-agent/bin/codedeploy-agent || fail "CodeDeploy Agent executable is missing"',
     'echo CODEDEPLOY_AGENT_READY'
 )
-Invoke-SsmBootstrap -InstanceIds $backendIds -Commands $agentBootstrap
+$backendIds = @(Invoke-SsmBootstrapForCurrentAsg -AutoScalingGroupName $autoScalingGroup -Commands $agentBootstrap)
+Write-Host "CodeDeploy Agent readiness reconciled for current Backend ASG instances: $($backendIds -join ', ')"
 
 $imageTag = "sha-$RevisionId"
 $localImage = "lucent-backend:$imageTag"

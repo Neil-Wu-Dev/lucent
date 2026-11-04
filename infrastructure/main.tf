@@ -635,33 +635,114 @@ resource "aws_launch_template" "backend" {
 
   user_data = base64encode(<<-EOF
     #!/bin/bash
-    set -euxo pipefail
+    set -euo pipefail
 
     REGION="eu-west-1"
+    LUCENT_PACKAGE_LOCK="/var/lock/lucent-package-bootstrap.lock"
+
+    fail() {
+      echo "LUCENT_BOOTSTRAP_ERROR: $*" >&2
+      exit 1
+    }
+
+    if ! command -v flock >/dev/null 2>&1; then
+      fail "flock is required to serialize Lucent package installation"
+    fi
+    exec 9>"$LUCENT_PACKAGE_LOCK"
+    flock -w 900 9 || fail "timed out waiting for the Lucent package-installation lock"
+
+    package_manager_busy() {
+      pgrep -x dnf >/dev/null 2>&1 ||
+        pgrep -x yum >/dev/null 2>&1 ||
+        pgrep -x rpm >/dev/null 2>&1 ||
+        fuser /var/lib/rpm/Packages /var/cache/dnf >/dev/null 2>&1
+    }
+
+    wait_for_package_manager() {
+      local deadline=$((SECONDS + 600))
+      while package_manager_busy; do
+        if (( SECONDS >= deadline )); then
+          return 1
+        fi
+        echo "Waiting for an existing DNF/RPM transaction to finish..."
+        sleep 5
+      done
+      return 0
+    }
+
+    dnf_install() {
+      local attempt=1
+      local max_attempts=3
+      local log_file
+
+      while (( attempt <= max_attempts )); do
+        if ! wait_for_package_manager; then
+          echo "LUCENT_BOOTSTRAP_ERROR: timed out waiting for DNF/RPM before installing: $*" >&2
+          return 1
+        fi
+        log_file=$(mktemp /tmp/lucent-dnf.XXXXXX)
+        if dnf install -y "$@" 2>&1 | tee "$log_file"; then
+          rm -f "$log_file"
+          return 0
+        fi
+
+        if grep -Eq 'No such file or directory|Cannot open.*\.rpm|Failed to open.*\.rpm' "$log_file"; then
+          if ! wait_for_package_manager; then
+            echo "LUCENT_BOOTSTRAP_ERROR: DNF cache recovery blocked by another package transaction" >&2
+            rm -f "$log_file"
+            return 1
+          fi
+          echo "Recovering a missing cached RPM before retry $attempt/$max_attempts..."
+          dnf clean all || { rm -f "$log_file"; return 1; }
+          dnf makecache --refresh || { rm -f "$log_file"; return 1; }
+        fi
+        rm -f "$log_file"
+
+        if (( attempt == max_attempts )); then
+          echo "LUCENT_BOOTSTRAP_ERROR: DNF failed after $max_attempts attempts while installing: $*" >&2
+          return 1
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+      done
+    }
+
+    ensure_active_service() {
+      local service_name="$1"
+      systemctl enable --now "$service_name"
+      systemctl is-active --quiet "$service_name" || fail "$service_name is not active"
+    }
 
     if ! command -v amazon-ssm-agent >/dev/null 2>&1; then
-      dnf install -y amazon-ssm-agent
+      dnf_install amazon-ssm-agent || fail "could not install amazon-ssm-agent"
     fi
-    systemctl enable --now amazon-ssm-agent
+    ensure_active_service amazon-ssm-agent
 
     if ! command -v docker >/dev/null 2>&1; then
-      dnf install -y docker
+      dnf_install docker || fail "could not install docker"
     fi
-    systemctl enable --now docker
+    ensure_active_service docker
 
     if ! command -v aws >/dev/null 2>&1; then
-      dnf install -y awscli || dnf install -y awscli2 || dnf install -y aws-cli
+      if ! dnf_install awscli; then
+        dnf_install awscli2 || dnf_install aws-cli || fail "could not install an AWS CLI package"
+      fi
     fi
 
-    if ! systemctl list-unit-files codedeploy-agent.service >/dev/null 2>&1; then
-      dnf install -y ruby wget
+    if ! test -x /opt/codedeploy-agent/bin/codedeploy-agent; then
+      dnf_install ruby wget || fail "could not install Ruby and wget for CodeDeploy Agent"
       cd /tmp
       wget -q -O codedeploy-install "https://aws-codedeploy-$${REGION}.s3.$${REGION}.amazonaws.com/latest/install"
       chmod +x codedeploy-install
       ./codedeploy-install auto
     fi
-    systemctl enable --now codedeploy-agent
-    systemctl is-active --quiet codedeploy-agent
+    ensure_active_service codedeploy-agent
+
+    command -v amazon-ssm-agent >/dev/null 2>&1 || fail "amazon-ssm-agent executable is missing"
+    command -v docker >/dev/null 2>&1 || fail "docker executable is missing"
+    command -v aws >/dev/null 2>&1 || fail "AWS CLI executable is missing"
+    test -x /opt/codedeploy-agent/bin/codedeploy-agent || fail "CodeDeploy Agent executable is missing"
+    echo "LUCENT_BOOTSTRAP_READY"
   EOF
   )
 
