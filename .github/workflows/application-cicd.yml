@@ -154,6 +154,10 @@ jobs:
           }
           terraform init -reconfigure
 
+      - name: Resolve persistent CodeDeploy and ASG health state
+        shell: powershell
+        run: .\scripts\codedeploy-asg-integration-state.ps1 -Action ResolveForInfrastructure -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
       - name: Deploy application
         shell: powershell
         run: .\scripts\deploy.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
@@ -178,6 +182,18 @@ jobs:
         run: .\scripts\reconcile-backend-codedeploy-asg.ps1 -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
 
       - name: Verify fully converged application
+        shell: powershell
+        run: .\scripts\verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -RequireBackendHttp
+
+      - name: Verify converged deployment security before ELB health promotion
+        shell: powershell
+        run: .\scripts\security-verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -Ci
+
+      - name: Enable production ELB health checks for Backend ASG
+        shell: powershell
+        run: .\scripts\promote-backend-asg-elb-health.ps1 -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+
+      - name: Verify final production application health
         shell: powershell
         run: .\scripts\verify.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -RequireBackendHttp
 

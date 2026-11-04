@@ -135,6 +135,25 @@ function Get-LastSuccessfulDeploymentId {
     return [string]$DeploymentGroup.lastSuccessfulDeployment.deploymentId
 }
 
+function Get-AsgHealthCheckType {
+    param([Parameter(Mandatory = $true)][string]$AutoScalingGroup)
+
+    $result = Invoke-NativeResult -Exe $AwsExe -Arguments @(
+        'autoscaling', 'describe-auto-scaling-groups', '--region', $region,
+        '--auto-scaling-group-names', $AutoScalingGroup,
+        '--query', 'AutoScalingGroups[0].HealthCheckType', '--output', 'text'
+    )
+    if ($result.ExitCode -ne 0) {
+        throw "Unable to read Backend ASG health-check mode: $($result.Error)"
+    }
+
+    $healthCheckType = $result.Output.Trim()
+    if ($healthCheckType -notin @('EC2', 'ELB')) {
+        throw "Backend ASG returned an unexpected health-check mode: $healthCheckType"
+    }
+    return $healthCheckType
+}
+
 function Write-Marker {
     param($Configuration, [Parameter(Mandatory = $true)][string]$DeploymentId)
 
@@ -168,6 +187,7 @@ switch ($Action) {
     'ResolveForInfrastructure' {
         $configuration = Get-Configuration
         $enabled = $false
+        $elbHealthChecksEnabled = $false
 
         if ($null -ne $configuration) {
             $markerExists = Test-MarkerExists -Bucket $configuration.Bucket
@@ -175,6 +195,9 @@ switch ($Action) {
             $deploymentId = Get-LastSuccessfulDeploymentId -DeploymentGroup $deploymentGroup
             $hasSuccessfulDeployment = -not [string]::IsNullOrWhiteSpace($deploymentId)
             $enabled = $hasSuccessfulDeployment -and (Test-GroupHasAutoScalingIntegration -DeploymentGroup $deploymentGroup -AutoScalingGroup $configuration.AutoScalingGroup)
+            if ($enabled) {
+                $elbHealthChecksEnabled = (Get-AsgHealthCheckType -AutoScalingGroup $configuration.AutoScalingGroup) -eq 'ELB'
+            }
 
             if ($enabled -and -not $markerExists) {
                 Write-Warning 'CodeDeploy ASG integration is active but its S3 marker is missing; restoring the marker from the verified Deployment Group state.'
@@ -187,8 +210,9 @@ switch ($Action) {
 
         if ($env:GITHUB_ENV) {
             [IO.File]::AppendAllText($env:GITHUB_ENV, "TF_VAR_codedeploy_enable_asg_integration=$($enabled.ToString().ToLowerInvariant())`n", (New-Object System.Text.UTF8Encoding($false)))
+            [IO.File]::AppendAllText($env:GITHUB_ENV, "TF_VAR_backend_asg_enable_elb_health_checks=$($elbHealthChecksEnabled.ToString().ToLowerInvariant())`n", (New-Object System.Text.UTF8Encoding($false)))
         }
-        Write-Host "Persistent CodeDeploy ASG integration resolved: $enabled"
+        Write-Host "Persistent CodeDeploy ASG integration resolved: $enabled; ELB health checks resolved: $elbHealthChecksEnabled"
     }
     'MarkSuccessfulStageA' {
         $configuration = Get-Configuration

@@ -67,7 +67,7 @@ variable "backend_instance_warmup_seconds" {
 }
 
 variable "backend_asg_health_check_grace_seconds" {
-  description = "Time allowed for a new backend instance to receive the first application deployment before ALB health failures trigger replacement."
+  description = "ELB health-check grace period used only after the Backend ASG has completed CodeDeploy production promotion."
   type        = number
   default     = 600
 
@@ -75,6 +75,12 @@ variable "backend_asg_health_check_grace_seconds" {
     condition     = var.backend_asg_health_check_grace_seconds >= var.backend_instance_warmup_seconds
     error_message = "The Backend ASG health-check grace period must be at least the instance warmup period."
   }
+}
+
+variable "backend_asg_enable_elb_health_checks" {
+  description = "Persistent production health-check switch. False uses EC2 health during first CodeDeploy bootstrap; true restores ELB health checks only after CodeDeploy ASG integration and full convergence succeed."
+  type        = bool
+  default     = false
 }
 
 variable "alb_listener_port" {

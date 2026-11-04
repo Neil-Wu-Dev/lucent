@@ -762,10 +762,11 @@ resource "aws_autoscaling_group" "backend" {
   min_size          = var.backend_asg_min_size
   desired_capacity  = var.backend_asg_desired_capacity
   max_size          = var.backend_asg_max_size
-  health_check_type = "ELB"
-  # This is intentionally longer than metric warmup. It prevents the ASG from
-  # replacing fresh instances while the first Application CI/CD release is
-  # building and deploying the image after infrastructure creation.
+  # First release uses EC2 health so an empty Backend container slot cannot be
+  # terminated solely because the ALB correctly reports it as unhealthy. The
+  # Application Pipeline restores ELB health only after CodeDeploy lifecycle
+  # integration and a verified fleet convergence.
+  health_check_type         = var.backend_asg_enable_elb_health_checks ? "ELB" : "EC2"
   health_check_grace_period = var.backend_asg_health_check_grace_seconds
   target_group_arns         = [aws_lb_target_group.backend.arn]
   vpc_zone_identifier       = [aws_subnet.app_a.id, aws_subnet.app_b.id]
