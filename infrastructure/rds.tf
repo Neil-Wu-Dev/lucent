@@ -50,7 +50,7 @@ resource "aws_db_instance" "lucent" {
 
   allocated_storage     = 20
   max_allocated_storage = 25
-  storage_type          = "gp3"
+  storage_type          = "gp2"
   storage_encrypted     = true
 
   db_name  = var.database_name
