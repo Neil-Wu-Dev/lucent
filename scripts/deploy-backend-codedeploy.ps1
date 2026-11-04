@@ -249,6 +249,12 @@ function New-CodeDeployRevisionArchive {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+    # Do not calculate an archive name by slicing absolute Windows paths. TEMP
+    # can be surfaced as a short path (for example SONICR~1) while child files
+    # use their long path. URI relative paths remain correct in either form.
+    $sourceRoot = [System.IO.Path]::GetFullPath($SourceDirectory).TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+    $sourceUri = New-Object System.Uri($sourceRoot)
+
     $archive = [System.IO.Compression.ZipFile]::Open(
         $ArchivePath,
         [System.IO.Compression.ZipArchiveMode]::Create
@@ -256,7 +262,11 @@ function New-CodeDeployRevisionArchive {
 
     try {
         Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse | ForEach-Object {
-            $relativePath = $_.FullName.Substring($SourceDirectory.Length).TrimStart('\').Replace('\', '/')
+            $fileUri = New-Object System.Uri([System.IO.Path]::GetFullPath($_.FullName))
+            $relativePath = [System.Uri]::UnescapeDataString($sourceUri.MakeRelativeUri($fileUri).ToString()).Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($relativePath) -or $relativePath.StartsWith('../', [System.StringComparison]::Ordinal)) {
+                throw "Cannot derive a ZIP-relative path for $($_.FullName) from $SourceDirectory."
+            }
             $entry = $archive.CreateEntry(
                 $relativePath,
                 [System.IO.Compression.CompressionLevel]::Optimal
@@ -322,15 +332,74 @@ function Get-NormalizedShellHookBytes {
     return (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)
 }
 
+function Get-CodeDeployZipEntryText {
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    $stream = $Entry.Open()
+    $memory = New-Object System.IO.MemoryStream
+    try {
+        $stream.CopyTo($memory)
+        $bytes = $memory.ToArray()
+    }
+    finally {
+        $memory.Dispose()
+        $stream.Dispose()
+    }
+
+    try {
+        return (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
+    }
+    catch {
+        throw "CodeDeploy ZIP entry is not valid UTF-8: $($Entry.FullName)"
+    }
+}
+
 function Test-CodeDeployRevisionArchive {
     param([Parameter(Mandatory = $true)][string]$ArchivePath)
 
     $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
-        $hooks = @($archive.Entries | Where-Object { $_.FullName -like 'scripts/*.sh' })
-        if ($hooks.Count -eq 0) { throw 'CodeDeploy revision ZIP does not contain Shell hooks.' }
+        $requiredHookPaths = @(
+            'scripts/application_stop.sh',
+            'scripts/before_install.sh',
+            'scripts/after_install.sh',
+            'scripts/application_start.sh',
+            'scripts/validate_service.sh'
+        )
+        $requiredPaths = @('appspec.yml', 'deployment.env') + $requiredHookPaths
+        $entryNames = @($archive.Entries | ForEach-Object { $_.FullName })
 
-        foreach ($hook in $hooks) {
+        foreach ($entryName in ($entryNames | Sort-Object)) {
+            Write-Host "CodeDeploy ZIP entry: $entryName"
+        }
+
+        foreach ($requiredPath in $requiredPaths) {
+            if ($requiredPath -notin $entryNames) {
+                throw "CodeDeploy revision ZIP is missing required root entry: $requiredPath"
+            }
+        }
+
+        $appSpec = $archive.GetEntry('appspec.yml')
+        $appSpecText = Get-CodeDeployZipEntryText -Entry $appSpec
+        if ($appSpecText -notmatch '(?m)^version:\s*0\.0\s*$' -or $appSpecText -notmatch '(?m)^os:\s*linux\s*$') {
+            throw 'CodeDeploy revision ZIP appspec.yml is not a Linux CodeDeploy AppSpec document.'
+        }
+        foreach ($requiredHookPath in $requiredHookPaths) {
+            if ($appSpecText -notmatch [regex]::Escape("location: $requiredHookPath")) {
+                throw "CodeDeploy AppSpec does not reference required hook: $requiredHookPath"
+            }
+        }
+
+        $deploymentEnvironment = $archive.GetEntry('deployment.env')
+        $deploymentEnvironmentText = Get-CodeDeployZipEntryText -Entry $deploymentEnvironment
+        foreach ($requiredEnvironmentKey in @('LUCENT_AWS_REGION', 'LUCENT_BACKEND_IMAGE', 'LUCENT_DATABASE_SECRET_ARN', 'LUCENT_REVISION_ID')) {
+            if ($deploymentEnvironmentText -notmatch "(?m)^$requiredEnvironmentKey=.+$") {
+                throw "CodeDeploy revision ZIP deployment.env is missing $requiredEnvironmentKey."
+            }
+        }
+
+        foreach ($requiredHookPath in $requiredHookPaths) {
+            $hook = $archive.GetEntry($requiredHookPath)
             $externalAttributes = [BitConverter]::ToUInt32(
                 [BitConverter]::GetBytes([int]$hook.ExternalAttributes),
                 0
@@ -338,13 +407,7 @@ function Test-CodeDeployRevisionArchive {
             $mode = (($externalAttributes -shr 16) -band 0x1FF)
             if ($mode -ne 493) { throw "CodeDeploy Shell hook is not executable (0755): $($hook.FullName)" }
 
-            $reader = New-Object System.IO.StreamReader($hook.Open(), (New-Object System.Text.UTF8Encoding($false, $true)), $false)
-            try {
-                $content = $reader.ReadToEnd()
-            }
-            finally {
-                $reader.Dispose()
-            }
+            $content = Get-CodeDeployZipEntryText -Entry $hook
 
             if ($content.StartsWith([char]0xFEFF)) { throw "CodeDeploy Shell hook contains a UTF-8 BOM: $($hook.FullName)" }
             if ($content.Contains("`r")) { throw "CodeDeploy Shell hook contains CRLF or CR: $($hook.FullName)" }
