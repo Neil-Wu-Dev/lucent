@@ -758,10 +758,10 @@ resource "aws_launch_template" "backend" {
 }
 
 resource "aws_autoscaling_group" "backend" {
-  name                      = "lucent-backend-asg"
-  min_size                  = var.backend_asg_min_size
-  desired_capacity          = var.backend_asg_desired_capacity
-  max_size                  = var.backend_asg_max_size
+  name             = "lucent-backend-asg"
+  min_size         = var.backend_asg_min_size
+  desired_capacity = var.backend_asg_desired_capacity
+  max_size         = var.backend_asg_max_size
   # First release uses EC2 health so an empty Backend container slot cannot be
   # terminated solely because the ALB correctly reports it as unhealthy. The
   # Application Pipeline restores ELB health only after CodeDeploy lifecycle

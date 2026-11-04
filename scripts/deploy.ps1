@@ -4,6 +4,7 @@ param(
     [string]$TerraformDir = '',
     [string]$FrontendDir = '',
     [string]$BackendDir = '',
+    [string]$RevisionId = '',
     [switch]$ApplyInfrastructure
 )
 
@@ -394,7 +395,8 @@ Write-Host '=== BACKEND: deploy immutable revision through CodeDeploy ==='
 & (Join-Path $PSScriptRoot 'deploy-backend-codedeploy.ps1') `
     -ProjectDir $ProjectDir `
     -TerraformDir $TerraformDir `
-    -BackendDir $BackendDir
+    -BackendDir $BackendDir `
+    -RevisionId $RevisionId
 
 Write-Host '=== DEPLOYMENT COMMANDS FINISHED ==='
 Write-Host "ALB: $alb"

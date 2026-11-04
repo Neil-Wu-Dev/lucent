@@ -160,7 +160,7 @@ jobs:
 
       - name: Deploy application
         shell: powershell
-        run: .\scripts\deploy.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure")
+        run: .\scripts\deploy.ps1 -ProjectDir $env:GITHUB_WORKSPACE -TerraformDir (Join-Path $env:GITHUB_WORKSPACE "infrastructure") -RevisionId '${{ github.event.workflow_run.head_sha }}'
 
       # deploy.ps1 waits for CodeDeploy's successful lifecycle result. Do not
       # require every pre-existing ASG instance to be healthy here: instances
