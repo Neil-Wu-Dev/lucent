@@ -1,3 +1,4 @@
+
 # Lucent Backend deployment through AWS CodeDeploy. This script deliberately
 # uses SSM only to bootstrap CodeDeploy Agent on existing ASG instances; it
 # never starts or replaces the Backend Docker container through SSM.
@@ -122,14 +123,16 @@ function Invoke-SsmBootstrap {
             (New-Object System.Text.UTF8Encoding($false))
         )
 
-        $commandId = (Invoke-Native -Exe $AwsExe -Arguments @(
-                'ssm', 'send-command', '--region', $region,
-                '--instance-ids'
-            ) + $InstanceIds + @(
-                '--document-name', 'AWS-RunShellScript',
-                '--parameters', ('file://' + $parameterFile.Replace('\', '/')),
-                '--query', 'Command.CommandId', '--output', 'text'
-            )).Trim()
+        $ssmArguments = @(
+            'ssm', 'send-command', '--region', $region,
+            '--instance-ids'
+        ) + @($InstanceIds) + @(
+            '--document-name', 'AWS-RunShellScript',
+            '--parameters', ('file://' + $parameterFile.Replace('\', '/')),
+            '--query', 'Command.CommandId', '--output', 'text'
+        )
+
+        $commandId = (Invoke-Native -Exe $AwsExe -Arguments $ssmArguments).Trim()
 
         if ([string]::IsNullOrWhiteSpace($commandId)) {
             throw 'CodeDeploy Agent bootstrap did not return an SSM Command ID.'
