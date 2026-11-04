@@ -534,7 +534,7 @@ resource "aws_lb_target_group" "backend" {
     enabled             = true
     protocol            = "HTTP"
     port                = "traffic-port"
-    path                = "/api/v1/notes"
+    path                = "/actuator/health"
     matcher             = "200"
     interval            = 30
     timeout             = 5

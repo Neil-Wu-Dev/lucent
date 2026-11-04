@@ -89,8 +89,14 @@ function Test-MarkerExists {
     )
     if ($result.ExitCode -eq 0) { return $true }
 
-    $details = $result.Error + $result.Output
-    if ($details -match '404|Not Found|HeadObject') { return $false }
+    $details = "$($result.Error)`n$($result.Output)"
+    # A missing S3 object returns a documented 404/NoSuchKey response from
+    # HeadObject. Do not turn access, network, or other AWS errors into a
+    # false Stage-A result merely because the operation name is HeadObject.
+    $isObjectMissing =
+        $details -match '(?i)An error occurred \((404|NoSuchKey|NotFound)\) when calling the HeadObject operation' -or
+        $details -match '(?i)\bHeadObject\b.*\b(404|NoSuchKey|NotFound)\b'
+    if ($isObjectMissing) { return $false }
     throw "Unable to read CodeDeploy integration marker: $details"
 }
 

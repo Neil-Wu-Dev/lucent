@@ -142,13 +142,26 @@ function Invoke-SsmBootstrap {
             $result = $null
             for ($attempt = 0; $attempt -lt 90; $attempt++) {
                 Start-Sleep -Seconds 3
-                $raw = Invoke-Native -Exe $AwsExe -Arguments @(
-                    'ssm', 'get-command-invocation', '--region', $region,
-                    '--command-id', $commandId, '--instance-id', $instanceId,
-                    '--output', 'json'
-                )
+                try {
+                    $raw = Invoke-Native -Exe $AwsExe -Arguments @(
+                        'ssm', 'get-command-invocation', '--region', $region,
+                        '--command-id', $commandId, '--instance-id', $instanceId,
+                        '--output', 'json'
+                    )
+                }
+                catch {
+                    # SendCommand is eventually consistent. Retry only its
+                    # temporary missing-invocation response; all other SSM
+                    # failures must stop the deployment.
+                    if ($_.Exception.Message -match 'InvocationDoesNotExist') { continue }
+                    throw
+                }
                 $result = $raw | ConvertFrom-Json
                 if ($result.Status -in @('Success', 'Failed', 'Cancelled', 'TimedOut', 'Cancelling')) { break }
+            }
+
+            if ($null -eq $result) {
+                throw "Timed out waiting for SSM CodeDeploy Agent bootstrap invocation on $instanceId."
             }
 
             Write-Host "[CODEDEPLOY AGENT] $instanceId : $($result.Status) / code $($result.ResponseCode)"
@@ -181,6 +194,49 @@ function Login-EcrDocker {
 
     if ($exitCode -ne 0) {
         throw 'Docker ECR login failed.'
+    }
+}
+
+function Get-EcrImageDigestForTagOrNull {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryName,
+        [Parameter(Mandatory = $true)][string]$ImageTag
+    )
+
+    $errorFile = Join-Path $env:TEMP ('lucent-ecr-digest-' + [guid]::NewGuid().ToString() + '.err')
+    try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = & $AwsExe ecr describe-images --region $region `
+                --repository-name $RepositoryName `
+                --image-ids "imageTag=$ImageTag" `
+                --query 'imageDetails[0].imageDigest' --output text 2> $errorFile
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($exitCode -ne 0) {
+            $details = if (Test-Path -LiteralPath $errorFile) {
+                Get-Content -LiteralPath $errorFile -Raw
+            }
+            else {
+                ''
+            }
+            if ($details -match 'ImageNotFoundException') { return $null }
+            throw "Unable to resolve ECR tag ${RepositoryName}:${ImageTag}: $details"
+        }
+
+        $digest = ($output -join "`n").Trim()
+        if ($digest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "ECR returned an invalid digest for ${RepositoryName}:${ImageTag}."
+        }
+        return $digest
+    }
+    finally {
+        Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -387,28 +443,30 @@ $imageTag = "sha-$RevisionId"
 $localImage = "lucent-backend:$imageTag"
 $registry = $ecrRepository.Split('/')[0]
 $remoteImageTag = "${ecrRepository}:$imageTag"
+$repositoryName = $ecrRepository.Split('/')[-1]
 
-Write-Host '=== BACKEND: build and publish immutable ECR image ==='
-Push-Location $BackendDir
-try {
-    Invoke-Native -Exe 'docker' -Arguments @('build', '-t', $localImage, '.') | Out-Host
+$imageDigest = Get-EcrImageDigestForTagOrNull -RepositoryName $repositoryName -ImageTag $imageTag
+if ($null -eq $imageDigest) {
+    Write-Host '=== BACKEND: build and publish immutable ECR image ==='
+    Push-Location $BackendDir
+    try {
+        Invoke-Native -Exe 'docker' -Arguments @('build', '-t', $localImage, '.') | Out-Host
+    }
+    finally {
+        Pop-Location
+    }
+
+    Login-EcrDocker -Registry $registry
+    Invoke-Native -Exe 'docker' -Arguments @('tag', $localImage, $remoteImageTag) | Out-Host
+    Invoke-Native -Exe 'docker' -Arguments @('push', $remoteImageTag) | Out-Host
+
+    $imageDigest = Get-EcrImageDigestForTagOrNull -RepositoryName $repositoryName -ImageTag $imageTag
+    if ($null -eq $imageDigest) {
+        throw "ECR image was not found after push: $remoteImageTag"
+    }
 }
-finally {
-    Pop-Location
-}
-
-Login-EcrDocker -Registry $registry
-Invoke-Native -Exe 'docker' -Arguments @('tag', $localImage, $remoteImageTag) | Out-Host
-Invoke-Native -Exe 'docker' -Arguments @('push', $remoteImageTag) | Out-Host
-
-$imageDigest = (Invoke-Native -Exe $AwsExe -Arguments @(
-        'ecr', 'describe-images', '--region', $region,
-        '--repository-name', ($ecrRepository.Split('/')[-1]),
-        '--image-ids', "imageTag=$imageTag",
-        '--query', 'imageDetails[0].imageDigest', '--output', 'text'
-    )).Trim()
-if ($imageDigest -notmatch '^sha256:[0-9a-f]{64}$') {
-    throw "ECR did not return a valid immutable image digest for $remoteImageTag."
+else {
+    Write-Host "Reusing existing immutable ECR image for revision $RevisionId."
 }
 $imageReference = "${ecrRepository}@$imageDigest"
 
