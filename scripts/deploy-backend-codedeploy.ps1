@@ -310,12 +310,12 @@ function Get-NormalizedShellHookBytes {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $bytes = [System.IO.File]::ReadAllBytes($Path)
-    $offset = if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { 3 } else { 0 }
-    $payload = New-Object byte[] ($bytes.Length - $offset)
-    [Array]::Copy($bytes, $offset, $payload, 0, $payload.Length)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        throw "CodeDeploy Shell hook source contains a UTF-8 BOM: $Path"
+    }
 
     try {
-        $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($payload)
+        $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
     }
     catch {
         throw "CodeDeploy Shell hook is not valid UTF-8: $Path"
@@ -332,7 +332,7 @@ function Get-NormalizedShellHookBytes {
     return (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)
 }
 
-function Get-CodeDeployZipEntryText {
+function Get-CodeDeployZipEntryBytes {
     param([Parameter(Mandatory = $true)]$Entry)
 
     $stream = $Entry.Open()
@@ -345,6 +345,14 @@ function Get-CodeDeployZipEntryText {
         $memory.Dispose()
         $stream.Dispose()
     }
+
+    return $bytes
+}
+
+function Get-CodeDeployZipEntryText {
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    $bytes = Get-CodeDeployZipEntryBytes -Entry $Entry
 
     try {
         return (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
@@ -400,6 +408,13 @@ function Test-CodeDeployRevisionArchive {
 
         foreach ($requiredHookPath in $requiredHookPaths) {
             $hook = $archive.GetEntry($requiredHookPath)
+            $hookBytes = Get-CodeDeployZipEntryBytes -Entry $hook
+            if ($hookBytes.Length -eq 0 -or $hookBytes[0] -ne 0x23) {
+                throw "CodeDeploy Shell hook must start with byte # (0x23): $($hook.FullName)"
+            }
+            if ($hookBytes.Length -ge 3 -and $hookBytes[0] -eq 0xEF -and $hookBytes[1] -eq 0xBB -and $hookBytes[2] -eq 0xBF) {
+                throw "CodeDeploy Shell hook contains a UTF-8 BOM: $($hook.FullName)"
+            }
             $externalAttributes = [BitConverter]::ToUInt32(
                 [BitConverter]::GetBytes([int]$hook.ExternalAttributes),
                 0
@@ -409,7 +424,6 @@ function Test-CodeDeployRevisionArchive {
 
             $content = Get-CodeDeployZipEntryText -Entry $hook
 
-            if ($content.StartsWith([char]0xFEFF)) { throw "CodeDeploy Shell hook contains a UTF-8 BOM: $($hook.FullName)" }
             if ($content.Contains("`r")) { throw "CodeDeploy Shell hook contains CRLF or CR: $($hook.FullName)" }
             if (-not $content.StartsWith("#!/bin/bash`n", [StringComparison]::Ordinal)) { throw "CodeDeploy Shell hook has an invalid Bash shebang: $($hook.FullName)" }
         }
