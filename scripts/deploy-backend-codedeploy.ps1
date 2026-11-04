@@ -300,7 +300,7 @@ $agentBootstrap = @(
     'systemctl enable --now docker',
     'if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli || dnf install -y awscli2 || dnf install -y aws-cli; fi',
     'if ! systemctl list-unit-files codedeploy-agent.service >/dev/null 2>&1; then',
-    '  dnf install -y ruby wget curl',
+    '  dnf install -y ruby wget',
     '  wget -q -O /tmp/codedeploy-install "https://aws-codedeploy-${REGION}.s3.${REGION}.amazonaws.com/latest/install"',
     '  chmod +x /tmp/codedeploy-install',
     '  /tmp/codedeploy-install auto',

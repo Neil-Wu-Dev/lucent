@@ -654,7 +654,7 @@ resource "aws_launch_template" "backend" {
     fi
 
     if ! systemctl list-unit-files codedeploy-agent.service >/dev/null 2>&1; then
-      dnf install -y ruby wget curl
+      dnf install -y ruby wget
       cd /tmp
       wget -q -O codedeploy-install "https://aws-codedeploy-$${REGION}.s3.$${REGION}.amazonaws.com/latest/install"
       chmod +x codedeploy-install
