@@ -124,7 +124,7 @@ function Test-GroupHasAutoScalingIntegration {
     param($DeploymentGroup, [Parameter(Mandatory = $true)][string]$AutoScalingGroup)
 
     if ($null -eq $DeploymentGroup) { return $false }
-    $associatedGroups = @($DeploymentGroup.autoScalingGroups | ForEach-Object { [string]$_.autoScalingGroupName })
+    $associatedGroups = @($DeploymentGroup.autoScalingGroups | ForEach-Object { [string]$_.name })
     return $AutoScalingGroup -in $associatedGroups
 }
 

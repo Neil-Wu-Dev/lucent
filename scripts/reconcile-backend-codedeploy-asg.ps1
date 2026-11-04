@@ -116,7 +116,7 @@ $groupInfo = (
     ) | ConvertFrom-Json
 ).deploymentGroupInfo
 
-$associatedAsgNames = @($groupInfo.autoScalingGroups | ForEach-Object { [string]$_.autoScalingGroupName })
+$associatedAsgNames = @($groupInfo.autoScalingGroups | ForEach-Object { [string]$_.name })
 if ($autoScalingGroupName -notin $associatedAsgNames) {
     throw "CodeDeploy Deployment Group is not associated with ASG $autoScalingGroupName."
 }
