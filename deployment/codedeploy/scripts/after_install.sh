@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
+test -f /opt/lucent/codedeploy/deployment.env
 source /opt/lucent/codedeploy/deployment.env
 
 test -n "${LUCENT_AWS_REGION:?}"

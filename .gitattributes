@@ -1,0 +1,3 @@
+# CodeDeploy hooks execute on Amazon Linux, including when the revision ZIP is
+# assembled by the Windows self-hosted runner.
+deployment/codedeploy/scripts/*.sh text eol=lf

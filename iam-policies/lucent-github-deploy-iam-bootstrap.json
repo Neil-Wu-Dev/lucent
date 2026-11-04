@@ -82,6 +82,20 @@
       }
     },
     {
+      "Sid": "AttachOnlyCodeDeployManagedPolicy",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::228755392058:role/lucent-codedeploy-service-role",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
+        }
+      }
+    },
+    {
       "Sid": "ReadLucentRuntimeRoleAttachments",
       "Effect": "Allow",
       "Action": "iam:ListAttachedRolePolicies",

@@ -46,42 +46,9 @@ resource "aws_iam_role" "codedeploy_service" {
   }
 }
 
-resource "aws_iam_role_policy" "codedeploy_service" {
-  name = "lucent-codedeploy-service"
-  role = aws_iam_role.codedeploy_service.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ManageLucentAutoScalingDeploymentLifecycle"
-        Effect = "Allow"
-        Action = [
-          "autoscaling:CompleteLifecycleAction",
-          "autoscaling:DeleteLifecycleHook",
-          "autoscaling:DescribeAutoScalingGroups",
-          "autoscaling:DescribeLifecycleHooks",
-          "autoscaling:PutLifecycleEventHook",
-          "autoscaling:RecordLifecycleActionHeartbeat"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "ManageLucentLoadBalancerTargets"
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeInstances",
-          "ec2:DescribeTags",
-          "elasticloadbalancing:DeregisterTargets",
-          "elasticloadbalancing:DescribeLoadBalancers",
-          "elasticloadbalancing:DescribeTargetGroups",
-          "elasticloadbalancing:DescribeTargetHealth",
-          "elasticloadbalancing:RegisterTargets"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
+resource "aws_iam_role_policy_attachment" "codedeploy_service_managed" {
+  role       = aws_iam_role.codedeploy_service.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
 }
 
 resource "aws_codedeploy_app" "backend" {
@@ -126,4 +93,8 @@ resource "aws_codedeploy_deployment_group" "backend" {
   }
 
   outdated_instances_strategy = "UPDATE"
+
+  depends_on = [
+    aws_iam_role_policy_attachment.codedeploy_service_managed
+  ]
 }

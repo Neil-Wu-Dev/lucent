@@ -206,21 +206,93 @@ function New-CodeDeployRevisionArchive {
                 [System.IO.Compression.CompressionLevel]::Optimal
             )
 
+            $isShellHook = $relativePath -like 'scripts/*.sh'
+
             # 0100755 in the ZIP external attributes makes Linux CodeDeploy hook
             # scripts executable even though this archive is built on Windows.
-            if ($relativePath -like 'scripts/*') {
+            if ($isShellHook) {
                 $entry.ExternalAttributes = -2115174400
             }
 
             $entryStream = $entry.Open()
-            $inputStream = [System.IO.File]::OpenRead($_.FullName)
             try {
-                $inputStream.CopyTo($entryStream)
+                if ($isShellHook) {
+                    $normalizedBytes = Get-NormalizedShellHookBytes -Path $_.FullName
+                    $entryStream.Write($normalizedBytes, 0, $normalizedBytes.Length)
+                }
+                else {
+                    $inputStream = [System.IO.File]::OpenRead($_.FullName)
+                    try {
+                        $inputStream.CopyTo($entryStream)
+                    }
+                    finally {
+                        $inputStream.Dispose()
+                    }
+                }
             }
             finally {
-                $inputStream.Dispose()
                 $entryStream.Dispose()
             }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
+function Get-NormalizedShellHookBytes {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $offset = if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { 3 } else { 0 }
+    $payload = New-Object byte[] ($bytes.Length - $offset)
+    [Array]::Copy($bytes, $offset, $payload, 0, $payload.Length)
+
+    try {
+        $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($payload)
+    }
+    catch {
+        throw "CodeDeploy Shell hook is not valid UTF-8: $Path"
+    }
+
+    $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    if (-not $text.StartsWith("#!/bin/bash`n", [StringComparison]::Ordinal)) {
+        throw "CodeDeploy Shell hook must start with #!/bin/bash: $Path"
+    }
+    if (-not $text.EndsWith("`n", [StringComparison]::Ordinal)) {
+        $text += "`n"
+    }
+
+    return (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)
+}
+
+function Test-CodeDeployRevisionArchive {
+    param([Parameter(Mandatory = $true)][string]$ArchivePath)
+
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $hooks = @($archive.Entries | Where-Object { $_.FullName -like 'scripts/*.sh' })
+        if ($hooks.Count -eq 0) { throw 'CodeDeploy revision ZIP does not contain Shell hooks.' }
+
+        foreach ($hook in $hooks) {
+            $externalAttributes = [BitConverter]::ToUInt32(
+                [BitConverter]::GetBytes([int]$hook.ExternalAttributes),
+                0
+            )
+            $mode = (($externalAttributes -shr 16) -band 0x1FF)
+            if ($mode -ne 493) { throw "CodeDeploy Shell hook is not executable (0755): $($hook.FullName)" }
+
+            $reader = New-Object System.IO.StreamReader($hook.Open(), (New-Object System.Text.UTF8Encoding($false, $true)), $false)
+            try {
+                $content = $reader.ReadToEnd()
+            }
+            finally {
+                $reader.Dispose()
+            }
+
+            if ($content.StartsWith([char]0xFEFF)) { throw "CodeDeploy Shell hook contains a UTF-8 BOM: $($hook.FullName)" }
+            if ($content.Contains("`r")) { throw "CodeDeploy Shell hook contains CRLF or CR: $($hook.FullName)" }
+            if (-not $content.StartsWith("#!/bin/bash`n", [StringComparison]::Ordinal)) { throw "CodeDeploy Shell hook has an invalid Bash shebang: $($hook.FullName)" }
         }
     }
     finally {
@@ -241,7 +313,7 @@ function Write-CodeDeployFailureDetails {
         $instanceIds = @((Invoke-Native -Exe $AwsExe -Arguments @(
                     'deploy', 'list-deployment-instances', '--region', $region,
                     '--deployment-id', $DeploymentId, '--output', 'json'
-                ) | ConvertFrom-Json).instances)
+                ) | ConvertFrom-Json).instancesList)
 
         foreach ($instanceId in $instanceIds) {
             Invoke-Native -Exe $AwsExe -Arguments @(
@@ -360,6 +432,7 @@ try {
     )
 
     New-CodeDeployRevisionArchive -SourceDirectory $revisionRoot -ArchivePath $archivePath
+    Test-CodeDeployRevisionArchive -ArchivePath $archivePath
 
     $revisionKey = "codedeploy/backend/$RevisionId/lucent-backend-$RevisionId.zip"
     Invoke-Native -Exe $AwsExe -Arguments @(
