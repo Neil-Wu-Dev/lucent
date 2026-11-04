@@ -50,11 +50,14 @@
       "Resource": "arn:aws:iam::228755392058:role/lucent-codedeploy-service-role"
     },
     {
-      "Sid": "ReadIamRelationshipsNeededByTerraform",
-      "Effect": "Allow",
-      "Action": "iam:ListInstanceProfilesForRole",
-      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role"
-    },
+  "Sid": "ReadIamRelationshipsNeededByTerraform",
+  "Effect": "Allow",
+  "Action": "iam:ListInstanceProfilesForRole",
+  "Resource": [
+    "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role",
+    "arn:aws:iam::228755392058:role/lucent-codedeploy-service-role"
+  ]
+},
     {
       "Sid": "ListRolesNeededByTerraform",
       "Effect": "Allow",
