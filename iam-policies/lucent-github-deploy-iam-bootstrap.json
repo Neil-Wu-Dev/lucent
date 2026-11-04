@@ -79,10 +79,13 @@
       }
     },
     {
-      "Sid": "ReadLucentEc2RuntimeRoleAttachments",
+      "Sid": "ReadLucentRuntimeRoleAttachments",
       "Effect": "Allow",
       "Action": "iam:ListAttachedRolePolicies",
-      "Resource": "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role"
+      "Resource": [
+        "arn:aws:iam::228755392058:role/lucent-ec2-runtime-role",
+        "arn:aws:iam::228755392058:role/lucent-codedeploy-service-role"
+      ]
     },
     {
       "Sid": "PassLucentEc2RuntimeRoleToEc2Only",
