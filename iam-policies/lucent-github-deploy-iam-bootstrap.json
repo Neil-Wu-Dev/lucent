@@ -189,6 +189,109 @@
           "iam:AWSServiceName": "autoscaling.amazonaws.com"
         }
       }
+    },
+    {
+      "Sid": "ManageLucentMonitoringResources",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DeleteDashboards",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmsForMetric",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:PutDashboard",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageLucentMonitoringSnsTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:ListSubscriptionsByTopic",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe"
+      ],
+      "Resource": "arn:aws:sns:eu-west-1:228755392058:lucent-production-alerts"
+    },
+    {
+      "Sid": "ManageLucentMonitoringLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": "arn:aws:logs:eu-west-1:228755392058:log-group:/lucent/backend/application"
+    },
+    {
+      "Sid": "ManageLucentMonitoringParametersAndDocuments",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:AddTagsToResource",
+        "ssm:CreateAssociation",
+        "ssm:CreateDocument",
+        "ssm:DeleteAssociation",
+        "ssm:DeleteDocument",
+        "ssm:DeleteParameter",
+        "ssm:DescribeAssociation",
+        "ssm:DescribeDocument",
+        "ssm:GetDocument",
+        "ssm:GetParameter",
+        "ssm:ListAssociations",
+        "ssm:ListTagsForResource",
+        "ssm:ModifyDocumentPermission",
+        "ssm:PutParameter",
+        "ssm:UpdateAssociation",
+        "ssm:UpdateDocument",
+        "ssm:UpdateDocumentDefaultVersion"
+      ],
+      "Resource": [
+        "arn:aws:ssm:eu-west-1:228755392058:parameter/lucent/monitoring/*",
+        "arn:aws:ssm:eu-west-1:228755392058:document/Lucent-Monitoring-*",
+        "arn:aws:ssm:eu-west-1:228755392058:association/*"
+      ]
+    },
+    {
+      "Sid": "ManageLucentMonitoringAutomationRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::228755392058:role/lucent-monitoring-automation-role"
+    },
+    {
+      "Sid": "PassLucentMonitoringAutomationRoleToSsmOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::228755392058:role/lucent-monitoring-automation-role",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ssm.amazonaws.com"
+        }
+      }
     }
   ]
 }

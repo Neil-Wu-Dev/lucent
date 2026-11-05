@@ -127,3 +127,23 @@ output "lucent_alb_url" {
   description = "HTTP URL for Lucent through the shared ALB. /api/* routes to backend; all other paths route to frontend."
   value       = "http://${aws_lb.backend.dns_name}"
 }
+
+output "monitoring_dashboard_name" {
+  description = "CloudWatch dashboard containing Lucent infrastructure and application monitoring widgets."
+  value       = aws_cloudwatch_dashboard.production_monitoring.dashboard_name
+}
+
+output "monitoring_alerts_topic_arn" {
+  description = "SNS topic ARN used by Lucent production monitoring alarms."
+  value       = aws_sns_topic.monitoring_alerts.arn
+}
+
+output "monitoring_enabled_parameter_name" {
+  description = "Runtime Systems Manager Parameter that controls CloudWatch Agent metrics and Backend log collection."
+  value       = aws_ssm_parameter.monitoring_enabled.name
+}
+
+output "monitoring_state_manager_association_name" {
+  description = "State Manager Association that converges monitoring on all current and future tagged Backend EC2 instances."
+  value       = aws_ssm_association.backend_monitoring_convergence.association_name
+}

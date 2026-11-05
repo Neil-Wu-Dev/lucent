@@ -112,3 +112,41 @@ variable "codedeploy_enable_asg_integration" {
   type        = bool
   default     = false
 }
+
+# =========================
+# Monitoring
+# =========================
+
+variable "monitoring_alert_email" {
+  description = "Optional email address subscribed to Lucent production monitoring alerts. AWS requires recipient confirmation before notifications begin."
+  type        = string
+  default     = ""
+}
+
+variable "monitoring_default_enabled" {
+  description = "Initial runtime value for /lucent/monitoring/enabled. Later console ON/OFF operations intentionally persist outside Terraform value reconciliation."
+  type        = bool
+  default     = true
+}
+
+variable "monitoring_log_retention_days" {
+  description = "Retention period for centralized Lucent Backend application logs."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.monitoring_log_retention_days >= 1
+    error_message = "Monitoring log retention must be at least one day."
+  }
+}
+
+variable "monitoring_agent_collection_interval_seconds" {
+  description = "CloudWatch Agent Memory and Disk collection interval for Backend EC2 instances."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.monitoring_agent_collection_interval_seconds >= 60
+    error_message = "CloudWatch Agent collection interval must be at least 60 seconds for this t3.micro deployment."
+  }
+}

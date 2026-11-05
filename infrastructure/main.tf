@@ -423,6 +423,55 @@ resource "aws_iam_role_policy" "ec2_codedeploy_runtime" {
   })
 }
 
+# Monitoring is intentionally an additive permission set. The CloudWatch Agent
+# runs independently of Docker, CodeDeploy, and the Backend application.
+resource "aws_iam_role_policy" "ec2_monitoring_agent" {
+  name = "lucent-monitoring-agent-runtime"
+  role = aws_iam_role.ec2_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "PublishLucentAgentMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:PutMetricData"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "Lucent/EC2"
+          }
+        }
+      },
+      {
+        Sid      = "DescribeInstanceTagsForAgentDimensions"
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeTags"]
+        Resource = "*"
+      },
+      {
+        Sid    = "WriteLucentBackendLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:DescribeLogStreams",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.backend_application.arn}:*"
+      },
+      {
+        Sid    = "ReadLucentMonitoringConfiguration"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          aws_ssm_parameter.monitoring_enabled.arn,
+          aws_ssm_parameter.cloudwatch_agent_configuration.arn
+        ]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2_runtime" {
   name = "lucent-ec2-runtime-profile"
   role = aws_iam_role.ec2_runtime.name

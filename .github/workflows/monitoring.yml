@@ -1,0 +1,122 @@
+name: Monitoring Infrastructure
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lucent-infrastructure-production
+  cancel-in-progress: false
+
+jobs:
+  plan-and-apply-monitoring:
+    name: Plan and apply additive monitoring
+    runs-on: [self-hosted, Windows, X64]
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_DEFAULT_REGION: eu-west-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      TF_VAR_database_password: ${{ secrets.TF_VAR_DATABASE_PASSWORD }}
+      TF_VAR_monitoring_alert_email: ${{ vars.LUCENT_MONITORING_ALERT_EMAIL }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::228755392058:role/LucentGitHubDeployRole
+          aws-region: eu-west-1
+          role-duration-seconds: 3600
+          allowed-account-ids: '228755392058'
+          unset-current-credentials: true
+
+      - name: Verify Sandbox AWS identity
+        shell: powershell
+        run: .\scripts\assert-aws-account.ps1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.4"
+          terraform_wrapper: false
+
+      - name: Prepare Sandbox Local Terraform state
+        shell: powershell
+        run: .\scripts\manage-local-terraform-state.ps1 -Action Initialize
+
+      - name: Initialize Terraform Local State
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform init -reconfigure
+
+      - name: Back up existing Sandbox Terraform state
+        shell: powershell
+        run: .\scripts\manage-local-terraform-state.ps1 -Action BackupIfPresent
+
+      - name: Check Terraform formatting
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform fmt -check -recursive
+
+      - name: Validate Terraform
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform validate
+
+      - name: Create Monitoring plan
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform plan -out monitoring.tfplan
+
+      - name: Reject non-monitoring infrastructure changes
+        shell: powershell
+        working-directory: infrastructure
+        run: |
+          $plan = terraform show -json monitoring.tfplan | ConvertFrom-Json
+          $allowedAddresses = @(
+            'aws_cloudwatch_dashboard.production_monitoring',
+            'aws_cloudwatch_log_group.backend_application',
+            'aws_cloudwatch_metric_alarm.backend_high_cpu',
+            'aws_cloudwatch_metric_alarm.backend_high_memory',
+            'aws_cloudwatch_metric_alarm.backend_high_disk',
+            'aws_cloudwatch_metric_alarm.backend_unhealthy',
+            'aws_cloudwatch_metric_alarm.backend_service_unavailable',
+            'aws_cloudwatch_metric_alarm.backend_http_5xx',
+            'aws_cloudwatch_metric_alarm.rds_high_cpu',
+            'aws_cloudwatch_metric_alarm.rds_low_free_storage',
+            'aws_sns_topic.monitoring_alerts',
+            'aws_sns_topic_subscription.monitoring_alert_email',
+            'aws_ssm_parameter.monitoring_enabled',
+            'aws_ssm_parameter.cloudwatch_agent_configuration',
+            'aws_ssm_document.monitoring_converge',
+            'aws_ssm_document.monitoring_on',
+            'aws_ssm_document.monitoring_off',
+            'aws_ssm_association.backend_monitoring_convergence',
+            'aws_iam_role.monitoring_automation',
+            'aws_iam_role_policy.monitoring_automation',
+            'aws_iam_role_policy.ec2_monitoring_agent'
+          )
+          $unsafe = @($plan.resource_changes | Where-Object {
+            $address = [string]$_.address
+            $actions = @($_.change.actions | ForEach-Object { [string]$_ })
+            $hasChange = $actions -notcontains 'no-op'
+            $hasChange -and $address -notin $allowedAddresses
+          })
+          if ($unsafe.Count -gt 0) {
+            $details = $unsafe | ForEach-Object { "$($_.address) [$($_.change.actions -join ', ')]" }
+            throw "Monitoring deployment refuses non-monitoring changes: $($details -join '; ')"
+          }
+
+      - name: Apply Monitoring plan
+        shell: powershell
+        working-directory: infrastructure
+        run: terraform apply -auto-approve monitoring.tfplan
+
+      - name: Verify and back up Local Terraform state
+        shell: powershell
+        run: |
+          .\scripts\manage-local-terraform-state.ps1 -Action Verify
+          .\scripts\manage-local-terraform-state.ps1 -Action Backup
