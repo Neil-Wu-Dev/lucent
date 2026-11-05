@@ -276,6 +276,7 @@
     "iam:ListRolePolicies",
     "iam:ListRoleTags",
     "iam:ListAttachedRolePolicies",
+    "iam:ListInstanceProfilesForRole",
     "iam:PutRolePolicy",
     "iam:TagRole",
     "iam:UntagRole",
