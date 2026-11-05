@@ -269,6 +269,16 @@ resource "aws_iam_role_policy" "monitoring_automation" {
         Effect   = "Allow"
         Action   = ["ssm:GetCommandInvocation"]
         Resource = "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:managed-instance/*"
+      },
+      {
+        Sid    = "ObserveMonitoringRunCommand"
+        Effect = "Allow"
+        Action = [
+          "ssm:ListCommands",
+          "ssm:ListCommandInvocations",
+          "ssm:GetCommandInvocation"
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -463,7 +473,7 @@ resource "aws_cloudwatch_dashboard" "production_monitoring" {
           period = 60
           stat   = "Average"
           metrics = [
-            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.lucent.id],
+            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.lucent.identifier],
             [".", "DatabaseConnections", ".", "."],
             [".", "FreeStorageSpace", ".", ".", { stat = "Minimum" }],
             [".", "ReadLatency", ".", "."],
