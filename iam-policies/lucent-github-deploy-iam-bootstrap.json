@@ -265,23 +265,24 @@
       ]
     },
     {
-      "Sid": "ManageLucentMonitoringAutomationRole",
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateRole",
-        "iam:DeleteRole",
-        "iam:DeleteRolePolicy",
-        "iam:GetRole",
-        "iam:GetRolePolicy",
-        "iam:ListRolePolicies",
-        "iam:ListRoleTags",
-        "iam:PutRolePolicy",
-        "iam:TagRole",
-        "iam:UntagRole",
-        "iam:UpdateAssumeRolePolicy"
-      ],
-      "Resource": "arn:aws:iam::228755392058:role/lucent-monitoring-automation-role"
-    },
+  "Sid": "ManageLucentMonitoringAutomationRole",
+  "Effect": "Allow",
+  "Action": [
+    "iam:CreateRole",
+    "iam:DeleteRole",
+    "iam:DeleteRolePolicy",
+    "iam:GetRole",
+    "iam:GetRolePolicy",
+    "iam:ListRolePolicies",
+    "iam:ListRoleTags",
+    "iam:ListAttachedRolePolicies",
+    "iam:PutRolePolicy",
+    "iam:TagRole",
+    "iam:UntagRole",
+    "iam:UpdateAssumeRolePolicy"
+  ],
+  "Resource": "arn:aws:iam::228755392058:role/lucent-monitoring-automation-role"
+},
     {
       "Sid": "PassLucentMonitoringAutomationRoleToSsmOnly",
       "Effect": "Allow",
