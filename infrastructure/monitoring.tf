@@ -137,7 +137,10 @@ resource "aws_ssm_document" "monitoring_converge" {
         action = "aws:runShellScript"
         name   = "ConvergeCloudWatchAgent"
         inputs = {
-          runCommand = [<<-SHELL
+          # Normalize Windows checkout line endings before SSM writes its Linux
+          # _script.sh file. Keeping the Shebang as the first command makes the
+          # generated file directly executable by the SSM agent.
+          runCommand = split("\n", trimspace(replace(<<-SHELL
             #!/bin/bash
             set -euo pipefail
 
@@ -180,7 +183,7 @@ resource "aws_ssm_document" "monitoring_converge" {
             systemctl is-active --quiet amazon-cloudwatch-agent || fail "amazon-cloudwatch-agent is not active"
             echo "LUCENT_MONITORING_ENABLED"
           SHELL
-          ]
+          , "\r\n", "\n")))
         }
       }
     ]
